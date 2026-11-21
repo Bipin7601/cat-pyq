@@ -1,5 +1,8 @@
 // Usage: node tests/e2e/smoke.js [checkName]   (does not start a server)
 const {chromium} = require('playwright');
+const {execFileSync, spawn} = require('child_process');
+const fs = require('fs'), os = require('os'), path = require('path');
+const ROOT = path.resolve(__dirname, '..', '..');
 const BASE = process.env.BASE_URL || 'http://localhost:8765/';
 const MATHJAX = process.env.MATHJAX_LOCAL;
 
@@ -94,6 +97,15 @@ const checks = {
       await page.waitForSelector('#home-QA');
       const lr = (await box.innerText());
       if (!lr.includes('Last full test: 92 / 198')) throw new Error('last result missing: ' + lr);
+      // one link per kind with a result, newest first, under the test buttons, each opening its review
+      await page.evaluate(() => localStorage.setItem('catpyq.result.2023-1.QA', JSON.stringify({score: {total: 12, max: 66}, finishedAt: 0})));
+      await page.reload();
+      await page.waitForSelector('#home-QA');
+      const links = await box.locator('a.last-result').evaluateAll(as => as.map(a => a.getAttribute('href') + '=' + a.textContent.trim()));
+      if (links.join('|') !== '#review-2023-1-full=Last full test: 92 / 198 \u00b7 Review|#review-2023-1-QA=Last QA test: 12 / 66 \u00b7 Review')
+        throw new Error('last result links: ' + links.join('|'));
+      const below = await box.evaluate(b => !!(b.querySelector('.tests').compareDocumentPosition(b.querySelector('.last-result')) & Node.DOCUMENT_POSITION_FOLLOWING));
+      if (!below) throw new Error('last result is not under the buttons');
       await page.selectOption('#home-QA', 'Averages');
       await page.waitForSelector('#tally');
       if (!page.url().endsWith('#practice')) throw new Error('url ' + page.url());
@@ -170,8 +182,13 @@ const checks = {
       if (!sum.includes(`${want} / 198`)) throw new Error('timedFlow summary total ' + sum);
       const row = async s => (await page.locator(`.r-table tr[data-sec=${s}]`).innerText()).split(/\s+/).join(' ');
       const vt = (await row('VARC')).split(' ');
-      if (vt[0] !== 'VARC' || vt[2] !== '/' || vt[3] !== '72' || vt[4] !== '1' || Number(vt[5]) + Number(vt[6]) !== 1 || vt[7] !== '23') throw new Error('timedFlow VARC row ' + vt.join(' '));
-      for (const s of ['DILR', 'QA']) if (!(await row(s)).startsWith(s + ' 0 / ')) throw new Error('timedFlow ' + s + ' row ' + await row(s));
+      const acc = want === 3 ? '100%' : '0%';
+      if (vt[0] !== 'VARC' || vt[2] !== '/' || vt[3] !== '72' || vt[4] !== '1' || Number(vt[5]) + Number(vt[6]) !== 1 || vt[7] !== '23' || vt[8] !== acc || !/^\d\d:\d\d$/.test(vt[9])) throw new Error('timedFlow VARC row ' + vt.join(' '));
+      for (const s of ['DILR', 'QA']) if (!(await row(s)).startsWith(s + ' 0 / ') || !(await row(s)).includes(' \u2014 ')) throw new Error('timedFlow ' + s + ' row ' + await row(s));
+      const heads = (await page.locator('.r-table thead th').allInnerTexts()).map(t => t.trim().toLowerCase());
+      eq('columns', heads.join('|'), 'section|score|attempted|correct|wrong|unanswered|accuracy|time used');
+      const tot = (await page.locator('.r-table tfoot tr').innerText()).split(/\s+/);
+      if (tot[0] !== 'Total' || tot[1] !== String(want) || tot[3] !== '198' || tot[4] !== '1' || Number(tot[5]) + Number(tot[6]) !== 1 || tot[7] !== '65' || tot[8] !== acc || !/^\d\d:\d\d$/.test(tot[9])) throw new Error('timedFlow total row ' + tot.join(' '));
       await page.click('.r-filters button[data-f=unanswered]');
       eq('unanswered count', await page.locator('.r-q:not([hidden])').count(), 65);
       const first = await page.locator('.r-q:not([hidden])').first().innerText();
@@ -180,8 +197,17 @@ const checks = {
       await page.click('.r-filters button[data-f=all]');
       eq('all count', await page.locator('.r-q:not([hidden])').count(), 66);
       await page.click('a.brand');
-      const last = await page.locator('.pbox', {hasText: 'Slot 1'}).filter({hasText: '2023'}).locator('.last-result').innerText();
-      eq('last result', last, `Last full test: ${want} / 198`);
+      const lastLink = page.locator('.pbox', {hasText: 'Slot 1'}).filter({hasText: '2023'}).locator('a.last-result');
+      eq('last result', (await lastLink.innerText()).trim(), `Last full test: ${want} / 198 \u00b7 Review`);
+      // the review can be reopened from the paper box
+      await lastLink.click();
+      await page.waitForSelector('.t-review h1');
+      eq('reopened review url', page.url().split('#')[1], 'review-2023-1-full');
+      if (!(await page.locator('.t-review .r-summary').innerText()).includes(`${want} / 198`)) throw new Error('timedFlow: reopened review summary');
+      // and from the test route once nothing is in progress
+      await page.goto(BASE + '#test-2023-1-full');
+      await page.waitForSelector('.t-panel');
+      eq('view last review', await page.locator('.t-panel a', {hasText: 'View last review'}).getAttribute('href'), '#review-2023-1-full');
       // a damaged result gives a friendly panel, not a crash
       await page.evaluate(() => localStorage.setItem('catpyq.result.2023-1.full', '{"attempt":{"x":1},"score":"<img src=x onerror=alert(1)>"}'));
       await page.goto(BASE + '#review-2023-1-full');
@@ -253,6 +279,63 @@ const checks = {
       if (!st.r || st.r.score.max !== 66 || st.r.score.total !== 0 || !st.r.attempt.finished || !st.r.finishedAt) throw new Error('expiry: result ' + JSON.stringify(st.r && st.r.score));
       const txt = await page.locator('.t-review').innerText();
       if (!txt.includes('0 / 66')) throw new Error('expiry: review text ' + txt);
+      if (await page.locator('.r-table tfoot').count()) throw new Error('expiry: total row on a sectional test');
+    });
+  },
+  async reviewSetExpl() {
+    await withPage(async page => {
+      await page.goto(BASE + '#home');
+      await page.waitForSelector('#home-QA');
+      await page.evaluate(() => {
+        localStorage.clear();
+        const now = Date.now(), a = Object.assign(Core.createAttempt('2022-1', 'DILR', now - 60000), {finished: true, submittedAt: [now]});
+        const score = Core.scoreAttempt(a, {DILR: Core.sectionQuestions(App.items, '2022-1', 'DILR')});
+        localStorage.setItem('catpyq.result.2022-1.DILR', JSON.stringify({attempt: a, score, finishedAt: now}));
+      });
+      await page.goto(BASE + '#review-2022-1-DILR');
+      await page.waitForSelector('.t-review h1');
+      // set 2022-1-s25 has a set solution and no per-question ones
+      const q25 = page.locator('.r-q', {hasText: 'Q25 in the paper'});
+      const sol = await q25.locator('.solution').innerText();
+      if (/no worked explanation/.test(sol)) throw new Error('reviewSetExpl: Q25 claims no explanation: ' + sol);
+      if (!/set explanation/i.test(sol)) throw new Error('reviewSetExpl: Q25 does not point to the set explanation: ' + sol);
+      const det = q25.locator('details.r-setsol');
+      if ((await det.locator('summary').innerText()).trim() !== 'Set explanation') throw new Error('reviewSetExpl: no Set explanation toggle');
+      await det.locator('summary').click();
+      await det.locator('img[src^="data:"]').waitFor({timeout: 5000});
+      // a later question of the set carries it too (filters can hide the first)
+      if (!(await page.locator('.r-q', {hasText: 'Q27 in the paper'}).locator('details.r-setsol').count())) throw new Error('reviewSetExpl: Q27 lacks it');
+      // set 2022-1-s40 has no set solution
+      if (await page.locator('.r-q', {hasText: 'Q40 in the paper'}).locator('details.r-setsol').count()) throw new Error('reviewSetExpl: Q40 has one');
+    });
+  },
+  async storageBlocked() {
+    await withPage(async page => {
+      // every localStorage call throws, as with blocked site data or some private windows
+      await page.addInitScript(() => {
+        const deny = () => { throw new DOMException('denied', 'SecurityError'); };
+        for (const m of ['getItem', 'setItem', 'removeItem', 'clear', 'key']) Storage.prototype[m] = deny;
+      });
+      await page.goto(BASE + '#home');
+      await page.waitForSelector('#home-QA');
+      await page.locator('.pbox', {hasText: 'Slot 1'}).filter({hasText: '2023'}).locator('button[data-act=start-test][data-kind=QA]').click();
+      await page.waitForSelector('#tscreen', {timeout: 5000});
+      const note = await page.locator('#tscreen .t-nosave').innerText();
+      if (!/can\u2019t save progress/.test(note)) throw new Error('storageBlocked: no warning, got ' + note);
+      const pal = page.locator('#t-palette button');
+      await page.locator('#t-q button.opt[data-act=t-pick][data-v="0"]').first().click();
+      await page.click('[data-act=t-next]');
+      const st = await pal.evaluateAll(bs => bs.slice(0, 2).map(b => b.dataset.state).join(','));
+      if (st !== 'answered,not-answered') throw new Error('storageBlocked: palette ' + st);
+      await page.click('[data-act=t-submit]');
+      await page.click('[data-act=t-submit-yes]');
+      await page.waitForSelector('.t-review h1');
+      if (!(await page.locator('.r-table tr[data-sec=QA]').innerText()).split(/\s+/).includes('1')) throw new Error('storageBlocked: review row');
+      // practice keeps working too
+      await page.goto(BASE + '#practice');
+      await page.click('[data-act=sec][data-sec=QA]');
+      await page.locator('button.opt[data-act=pick]:not([disabled])').first().click();
+      await page.waitForSelector('.chip.ok, .chip.bad', {timeout: 5000});
     });
   },
   // Needs a PUBLIC build served at BASE_URL (e.g. BASE_URL=http://localhost:8766/ node tests/e2e/smoke.js publicBuild).
@@ -283,10 +366,69 @@ const checks = {
       if (bad.length) throw new Error('public: image requests ' + bad.join(', '));
     });
   },
+  // Builds its own PUBLIC site (work/build_data.py --public --expl-dir <temp>) with a sample explanation
+  // for one QA question and one VARC set, serves it on PUBLIC_EXPL_PORT (default 8767) and checks the
+  // x/ render path: a failed fetch is not cached, the text renders, MathJax typesets $$x^2$$
+  // (set MATHJAX_LOCAL when offline). Skipped in the default run, like publicBuild.
+  async publicExpl() {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'catpyq-expl-'));
+    const site = path.join(tmp, 'site'), ex = path.join(tmp, 'x');
+    const port = process.env.PUBLIC_EXPL_PORT || '8767', PUB = `http://127.0.0.1:${port}/`;
+    let server = null;
+    try {
+      fs.mkdirSync(site); fs.mkdirSync(ex);
+      fs.cpSync(path.join(ROOT, 'js'), path.join(site, 'js'), {recursive: true});
+      // the same document skeleton tools/sync_public.sh adds
+      fs.writeFileSync(path.join(site, 'index.html'), '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n' +
+        '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n' +
+        '<style>body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>\n</head>\n<body>\n' +
+        fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8') + '\n</body>\n</html>\n');
+      const build = (...a) => execFileSync('python3', ['-I', path.join(ROOT, 'work', 'build_data.py'), path.join(site, 'data'), '--public', ...a], {stdio: 'pipe'});
+      build();
+      const items = JSON.parse(fs.readFileSync(path.join(site, 'data', 'meta.json'), 'utf8')).items;
+      const qa = items.filter(u => u.paper === '2023-1' && u.section === 'QA').sort((a, b) => a.n - b.n)[0];
+      const rc = items.find(u => u.paper === '2023-1' && u.section === 'VARC' && u.kind === 'set');
+      fs.writeFileSync(path.join(ex, '2023-1-QA.json'), JSON.stringify({[qa.id]: '<p>zqSample: square it, $$x^2$$.</p>'}));
+      fs.writeFileSync(path.join(ex, '2023-1-VARC.json'), JSON.stringify({[rc.id]: '<p>zqSetSample: how to crack the passage.</p>'}));
+      build('--expl-dir', ex);
+      server = spawn('python3', ['-m', 'http.server', port, '--bind', '127.0.0.1'], {cwd: site, stdio: 'ignore'});
+      for (let i = 0; ; i++) {
+        try { if ((await fetch(PUB + 'data/meta.json')).ok) break; } catch (e) { if (i > 50) throw e; }
+        await new Promise(r => setTimeout(r, 100));
+      }
+      await withPage(async page => {
+        let fails = 1;
+        await page.route('**/data/x/2023-1-QA.json', r => (fails-- > 0 ? r.abort() : r.continue()));
+        await page.goto(PUB + '#paper-2023-1');
+        await page.click(`[data-act=reveal][data-q="${qa.id}"]`);
+        const sol = page.locator(`#c-${qa.id} .solution`);
+        await sol.locator('text=Couldn\u2019t load the explanation. Check your connection and reopen it.').waitFor({timeout: 5000});
+        // reopening fetches again: the failure was not cached
+        await page.goto(PUB + '#home');
+        await page.waitForSelector('#home-QA');
+        await page.goto(PUB + '#paper-2023-1');
+        await sol.locator('.expl', {hasText: 'zqSample'}).waitFor({timeout: 5000});
+        await sol.locator('.expl mjx-container').waitFor({timeout: 10000});
+        // the review shows the VARC set explanation
+        await page.evaluate(() => {
+          const now = Date.now(), a = Object.assign(Core.createAttempt('2023-1', 'VARC', now - 60000), {finished: true, submittedAt: [now]});
+          const score = Core.scoreAttempt(a, {VARC: Core.sectionQuestions(App.items, '2023-1', 'VARC')});
+          localStorage.setItem('catpyq.result.2023-1.VARC', JSON.stringify({attempt: a, score, finishedAt: now}));
+        });
+        await page.goto(PUB + '#review-2023-1-VARC');
+        const det = page.locator('.r-q details.r-setsol').first();
+        await det.locator('summary').click();
+        await det.locator('.expl', {hasText: 'zqSetSample'}).waitFor({timeout: 5000});
+      });
+    } finally {
+      if (server) server.kill();
+      fs.rmSync(tmp, {recursive: true, force: true});
+    }
+  },
 };
 
 (async () => {
-  const names = process.argv[2] ? [process.argv[2]] : Object.keys(checks).filter(n => n !== 'publicBuild');
+  const names = process.argv[2] ? [process.argv[2]] : Object.keys(checks).filter(n => n !== 'publicBuild' && n !== 'publicExpl');
   for (const n of names) {
     if (!checks[n]) throw new Error('unknown check ' + n);
     await checks[n]();

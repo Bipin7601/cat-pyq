@@ -146,7 +146,8 @@
           return `<li data-sec="${s}" class="${cls}"${i === a.secIndex ? ' aria-current="step"' : ""}><span>${s}</span></li>`;
         }).join("")}</ol>
         <div class="t-timer${ms < WARN_MS ? " warn" : ""}" id="t-timer" role="timer" aria-label="Time left in ${S.sec}">${fmt(ms)}</div>
-      </header>
+      </header>${A().store.persistent ? "" : `
+      <p class="t-nosave" role="status">This browser can\u2019t save progress, so this test won\u2019t survive a refresh.</p>`}
       <div class="t-body"><div class="t-main" id="t-main"></div><aside class="t-side" id="t-side" aria-label="Question palette"></aside></div>
     </div>`;
     const root = $("tscreen");
@@ -265,6 +266,8 @@
       return num(from) !== null && num(to) !== null ? Math.min(Math.max(0, to - from), Core.SECTION_MS) : null;
     });
   }
+  // correct / attempted, formatted like the practice tally
+  function accuracy(x) { return x.attempted > 0 ? Math.round(x.correct / x.attempted * 100) + "%" : "\u2014"; }
   function validResult(r, paper, kind) {
     const at = r && r.attempt, sc = r && r.score;
     return !!(at && sc && at.paper === paper && at.kind === kind && at.answers && typeof at.answers === "object" &&
@@ -281,7 +284,12 @@
     let h = `<article class="r-q" data-state="${state}"><div class="r-head"><b>Question ${i + 1}</b><span class="chip">${secName}</span>
       <span class="chip">${tita ? "TITA" : "MCQ"}</span>${q.n ? `<span class="src">Q${esc(q.n)} in the paper</span>` : ""}
       <span class="chip ${ok ? "ok" : state === "wrong" ? "bad" : ""}">${!answered ? "Not attempted" : ok ? "Correct" : "Wrong"}</span></div>`;
-    if (u.kind === "set") h += `<details class="r-dir"><summary>Set directions</summary>${A().directionsHtml(u)}</details>`;
+    if (u.kind === "set") {
+      h += `<details class="r-dir"><summary>Set directions</summary>${A().directionsHtml(u)}</details>`;
+      // on every question of the set, since a filter can hide the first one
+      const setSol = A().renderSetSolution(u);
+      if (setSol) h += `<details class="r-dir r-setsol"><summary>Set explanation</summary><div class="setsol">${setSol}</div></details>`;
+    }
     h += A().stemHtml(q, u);
     if (tita) {
       h += `<div class="r-ans">${answered ? `<span class="${ok ? "ok" : "bad"}">Your answer: ${esc(v)}</span>` : "<span>Not attempted</span>"}
@@ -310,16 +318,23 @@
     }
     const at = r.attempt, sc = r.score, times = sectionTimes(at);
     const secs = at.sections.filter(s => SECS.includes(s));
+    const FIELDS = ["score", "max", "attempted", "correct", "wrong", "unanswered"];
+    const cells = (x, t) => `<td>${x.score} / ${x.max}</td><td>${x.attempted}</td><td>${x.correct}</td><td>${x.wrong}</td><td>${x.unanswered}</td><td>${accuracy(x)}</td><td>${t === null ? "\u2013" : fmt(t)}</td>`;
+    const total = {time: null};
+    FIELDS.forEach(f => { total[f] = 0; });
     const rows = secs.map(s => {
-      const x = sc.sections[s] || {}, t = times[at.sections.indexOf(s)];
-      return `<tr data-sec="${s}"><td>${s}</td><td>${num(x.score) ?? 0} / ${num(x.max) ?? 0}</td><td>${num(x.attempted) ?? 0}</td><td>${num(x.correct) ?? 0}</td><td>${num(x.wrong) ?? 0}</td><td>${num(x.unanswered) ?? 0}</td><td>${t === null ? "–" : fmt(t)}</td></tr>`;
+      const raw = sc.sections[s] || {}, t = times[at.sections.indexOf(s)], x = {};
+      FIELDS.forEach(f => { x[f] = num(raw[f]) ?? 0; total[f] += x[f]; });
+      if (t !== null) total.time = (total.time || 0) + t;
+      return `<tr data-sec="${s}"><td>${s}</td>${cells(x, t)}</tr>`;
     }).join("");
+    const foot = secs.length > 1 ? `<tfoot><tr><th scope="row">Total</th>${cells(total, total.time)}</tr></tfoot>` : "";
     const blocks = secs.map(s => Core.sectionQuestions(A().items, paper, s).map((q, i) => {
       return reviewQuestion(q, i, s, at, A().items.find(x => x.id === q.unitId) || q);
     }).join("")).join("");
     appEl().innerHTML = `<section class="t-review"><div class="eyebrow">${esc(title(paper, kind))}</div><h1>Review</h1>
       <div class="r-summary"><p class="t-score">Total score <b>${sc.total} / ${sc.max}</b></p>
-        <table class="r-table"><thead><tr><th>Section</th><th>Score</th><th>Attempted</th><th>Correct</th><th>Wrong</th><th>Unanswered</th><th>Time used</th></tr></thead><tbody>${rows}</tbody></table></div>
+        <table class="r-table"><thead><tr><th>Section</th><th>Score</th><th>Attempted</th><th>Correct</th><th>Wrong</th><th>Unanswered</th><th>Accuracy</th><th>Time used</th></tr></thead><tbody>${rows}</tbody>${foot}</table></div>
       <div class="r-filters" role="group" aria-label="Filter questions">${FILTERS.map(([k, l]) =>
         `<button type="button" class="btn small" data-act="r-filter" data-f="${k}" aria-pressed="${k === "all"}">${l}</button>`).join("")}</div>
       <div id="r-list">${blocks || `<p class="empty-note">No questions are loaded for this paper.</p>`}</div>
@@ -349,7 +364,9 @@
     }
     const saved = A().store.get(attemptKey(paper, kind), null);
     if (!validAttempt(saved, paper, kind)) {
-      panel(`<h3>No ${esc(title(paper, kind))} in progress</h3><p>${startButton(paper, kind, "Start the test")}</p>`);
+      const last = validResult(A().store.get(resultKey(paper, kind), null), paper, kind)
+        ? ` <a class="btn" href="#review-${paper}-${kind}">View last review</a>` : "";
+      panel(`<h3>No ${esc(title(paper, kind))} in progress</h3><p>${startButton(paper, kind, "Start the test")}${last}</p>`);
       return;
     }
     const a = Core.applyTime(saved, Date.now());

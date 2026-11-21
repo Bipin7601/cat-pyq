@@ -82,7 +82,9 @@ main{padding-block:28px 64px;display:grid;gap:36px}
 .pbox.off{border-style:dashed;color:var(--faint)}
 .pbox h4{font-size:15px;margin:0}
 .pbox .pmeta{font:12px var(--f-mono);color:var(--muted)}
+.pbox .last-results{display:flex;flex-direction:column;gap:2px}
 .pbox .last-result{font-size:13px;color:var(--muted)}
+.pbox .last-result:hover{color:var(--accent)}
 .pbox .tests{display:flex;flex-wrap:wrap;gap:6px}
 .pbox .untimed{font-size:13px;color:var(--accent)}
 .home-pick{display:flex;flex-direction:column;gap:6px}
@@ -267,14 +269,17 @@ main.wide{max-width:1440px}
 .r-table th,.r-table td{border-bottom:1px solid var(--line);padding:7px 10px;text-align:right;font-variant-numeric:tabular-nums}
 .r-table th:first-child,.r-table td:first-child{text-align:left}
 .r-table th{font:600 11px var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.r-table tfoot th,.r-table tfoot td{font-weight:600;border-bottom:0;border-top:2px solid var(--line)}
+.r-table tfoot th{font:inherit;font-weight:600;letter-spacing:0;text-transform:none;color:inherit;text-align:left}
 .r-filters{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 16px}
 .r-filters .btn[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 .r-q{border:1px solid var(--line);border-radius:var(--r);background:var(--surface);padding:16px;margin-bottom:14px}
 .r-q[hidden]{display:none}
 .r-q .r-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
-.r-q .r-dir{margin-bottom:10px}.r-q .r-dir summary{cursor:pointer;color:var(--muted);font-size:13px}
+.r-q .r-dir{margin-bottom:10px}.r-q .r-setsol .setsol{margin-top:8px}.r-q .r-dir summary{cursor:pointer;color:var(--muted);font-size:13px}
 .r-q .opt{cursor:default}
 .r-ans{margin:10px 0;font-size:14px;display:flex;gap:16px;flex-wrap:wrap}
+.t-nosave{margin:0;padding:6px 12px;font-size:13px;background:var(--surface);border-bottom:1px solid var(--line);color:var(--muted)}
 .r-ans .ok{color:var(--ok)} .r-ans .bad{color:var(--bad)}
 
 @media (max-width:980px){.t-body{grid-template-columns:1fr}.t-side,.t-dir{position:static}.t-main.has-dir{grid-template-columns:1fr}.t-dir{border-right:0;border-bottom:1px solid var(--line);max-height:none}}
@@ -319,10 +324,23 @@ const YEARS = [2025,2024,2023,2022,2021,2020];
 const SLOTS = [1,2,3];
 
 /* ---------- storage (per-browser convenience) ---------- */
+// When localStorage throws (blocked site data, some private windows, previews) values are kept in
+// memory for this page's life: everything works, only surviving a refresh is lost.
+// mem holds a key only while its last localStorage write failed (null = deleted).
+const mem = new Map();
 const store = {
-  get(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch(e){ return d; } },
-  set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} },
-  del(k){ try{ localStorage.removeItem(k); }catch(e){} }
+  persistent: true,
+  get(k, d){
+    try{
+      if(mem.has(k)){ const m = mem.get(k); return m === null ? d : JSON.parse(m); }
+      const v = localStorage.getItem(k); return v ? JSON.parse(v) : d;
+    }catch(e){ return d; }
+  },
+  set(k, v){
+    const s = JSON.stringify(v);
+    try{ localStorage.setItem(k, s); mem.delete(k); }catch(e){ mem.set(k, s); store.persistent = false; }
+  },
+  del(k){ try{ localStorage.removeItem(k); mem.delete(k); }catch(e){ mem.set(k, null); store.persistent = false; } }
 };
 const K_PROG = "catpyq.progress.v1", K_FILT = "catpyq.filters.v2", K_FILT_V1 = "catpyq.filters.v1";
 let progress = store.get(K_PROG, {});          // qid -> {v: chosen value, ok: bool}
@@ -414,17 +432,22 @@ function rich(s){
 }
 
 /* ---------- images (lazy bundles) ---------- */
+// A failed or non-ok fetch rejects and is evicted, so the next render fetches again.
 const bundles = new Map();
 function bundle(kind, paper, sec){
   const k = `${kind}/${paper}-${sec}`;
-  if(!bundles.has(k)) bundles.set(k, fetch(`data/${k}.json`).then(r => r.ok ? r.json() : {}).catch(() => ({})));
+  if(!bundles.has(k)){
+    const p = fetch(`data/${k}.json`).then(r => { if(!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); });
+    p.catch(() => { if(bundles.get(k) === p) bundles.delete(k); });
+    bundles.set(k, p);
+  }
   return bundles.get(k);
 }
 function imgTag(kind, u, id, alt){
   return `<div class="imgpaper"><img alt="${esc(alt)}" data-b="${kind}" data-p="${esc(u.paper)}" data-s="${esc(u.section)}" data-id="${esc(id)}"></div>`;
 }
 function hydrate(img){
-  bundle(img.dataset.b, img.dataset.p, img.dataset.s).then(b => {
+  bundle(img.dataset.b, img.dataset.p, img.dataset.s).catch(() => ({})).then(b => {
     const src = b[img.dataset.id];
     if(src) img.src = src;
     else if(img.parentElement.classList.contains("imgpaper")) img.parentElement.innerHTML = `<p class="empty-note">Image not available.</p>`;
@@ -439,7 +462,7 @@ function hydrateExpl(el){
   bundle("x", el.dataset.xp, el.dataset.xs).then(b => {
     const h = b[el.dataset.xid];
     if(h){ el.innerHTML = h; typeset(el); } else el.innerHTML = `<p class="empty-note">Explanation coming soon.</p>`;
-  });
+  }, () => { el.innerHTML = `<p class="empty-note">Couldn\u2019t load the explanation. Check your connection and reopen it.</p>`; });
 }
 function observeImgs(root){
   root.querySelectorAll("img[data-b]:not([src])").forEach(i => io ? io.observe(i) : hydrate(i));
@@ -508,13 +531,20 @@ function directionsHtml(u){
   if(u.dirHtml) return `<div class="qtext mathy">${u.dirHtml}</div>`;
   return u.hasDirImg ? imgTag("q", u, u.id, "Set directions") : `<div class="qtext">${rich(u.directions)}</div>`;
 }
+const hasSetSolution = u => !!(u && u.kind === "set" && (features.originals ? u.hasSetSol : u.setExpl));
 /* shared by practice and the review screen: answer line + explanation, no buttons */
 function renderSolution(q, u){
   u = u || q;
+  const none = hasSetSolution(u) ? "This question is worked out in the set explanation." : "The source paper has no worked explanation for this question.";
   const body = !features.originals ? explTag(u, q.id, q.expl)
     : q.hasSolImg ? imgTag("s", u, q.id, `Solution to question ${q.n}`)
-    : (q.solution ? rich(q.solution) : `<p class="empty-note">The source paper has no worked explanation for this question.</p>`);
+    : (q.solution ? rich(q.solution) : `<p class="empty-note">${none}</p>`);
   return `<div class="solution"><h4>Solution</h4><div class="ans">Answer: ${answerText(q)}</div>${body}</div>`;
+}
+/* the set-level explanation body (practice set card and review), "" when the set has none */
+function renderSetSolution(u){
+  if(!hasSetSolution(u)) return "";
+  return features.originals ? imgTag("s", u, u.id, "Set explanation") : explTag(u, u.id, true);
 }
 function qBody(q, u){
   u = u || q;
@@ -556,7 +586,7 @@ function setCard(u){
     <div class="set-body">
       <div class="directions"><div class="directions-inner"><div class="eyebrow" style="margin-bottom:8px">Directions</div>
         ${directionsHtml(u)}
-        ${(features.originals ? u.hasSetSol : u.setExpl) ? (revealedSets.has(u.id) ? `<div class="setsol solution"><h4>Set explanation</h4>${features.originals ? imgTag("s", u, u.id, "Set explanation") : explTag(u, u.id, true)}</div>` : `<button class="btn small" data-act="setsol" data-set="${esc(u.id)}">Show set explanation</button>`) : ""}
+        ${hasSetSolution(u) ? (revealedSets.has(u.id) ? `<div class="setsol solution"><h4>Set explanation</h4>${renderSetSolution(u)}</div>` : `<button class="btn small" data-act="setsol" data-set="${esc(u.id)}">Show set explanation</button>`) : ""}
       </div></div>
       <div class="set-qs">${u.questions.map((q, j) => `<div class="set-q"><div class="qno">Question ${j+1} of ${u.questions.length} · Q${q.n} · ${q.type==="TITA"?"TITA":"MCQ"} ${statusChip(q)}</div>${qBody(q, u)}</div>`).join("")}</div>
     </div></article>`;
@@ -565,13 +595,17 @@ const unitCard = u => u.kind === "set" ? setCard(u) : qCard(u);
 
 /* ---------- views ---------- */
 const KINDS = [["full","Complete test","full test"],["VARC","VARC test","VARC test"],["DILR","DILR test","DILR test"],["QA","QA test","QA test"]];
-function lastResult(id){
-  let best = null;
+// one "Last … test" link per kind that has a result, newest first; each reopens that review
+function lastResults(id){
+  const rows = [];
   KINDS.forEach(([k,,label]) => {
+    if(!features.dilr && (k === "full" || k === "DILR")) return;
     const r = store.get(`catpyq.result.${id}.${k}`, null);
-    if(r && r.score && typeof r.score.total === "number" && typeof r.score.max === "number" && (!best || (r.finishedAt||0) > (best.at||0))) best = {at:r.finishedAt||0, text:`Last ${label}: ${r.score.total} / ${r.score.max}`};
+    if(r && r.score && typeof r.score.total === "number" && typeof r.score.max === "number")
+      rows.push({at: typeof r.finishedAt === "number" ? r.finishedAt : 0, k, text: `Last ${label}: ${r.score.total} / ${r.score.max} \u00b7 Review`});
   });
-  return best ? `<div class="last-result">${esc(best.text)}</div>` : "";
+  rows.sort((a, b) => b.at - a.at);
+  return rows.length ? `<div class="last-results">${rows.map(x => `<a class="last-result" href="#review-${id}-${x.k}">${esc(x.text)}</a>`).join("")}</div>` : "";
 }
 function paperBox(id, e){
   const title = paperLabel(id);
@@ -579,8 +613,8 @@ function paperBox(id, e){
   const qs = items.filter(u => u.paper === id).flatMap(questionsOf), st = statsFor(qs);
   return `<div class="pbox"><h4>${esc(title)}</h4>
     <div class="pmeta">QA ${e.QA} · ${features.dilr ? `DILR ${e.DILR} · ` : ""}VARC ${e.VARC} · ${st.attempted}/${qs.length} attempted</div>
-    ${lastResult(id)}
     <div class="tests">${KINDS.filter(([k]) => features.dilr || (k !== "full" && k !== "DILR")).map(([k,t]) => `<button type="button" class="btn small${k==="full"?" primary":""}" data-act="start-test" data-paper="${id}" data-kind="${k}">${t}</button>`).join("")}</div>
+    ${lastResults(id)}
     <a class="untimed" href="#paper-${id}">Practise untimed</a></div>`;
 }
 function paperGrid(avail){
@@ -715,7 +749,7 @@ function rerenderKeepScroll(anchorId){
 }
 const cardIdOf = qid => { const e = qIndex.get(qid); return e ? "c-" + e.unit.id : null; };
 window.App = {get items(){ return items; }, store, esc, typeset, imgTag, observeImgs, paperLabel, LETTERS,
-  get features(){ return features; }, stemHtml, renderSolution, optionBodyHtml, optionLayout, directionsHtml, route};
+  get features(){ return features; }, stemHtml, renderSolution, renderSetSolution, optionBodyHtml, optionLayout, directionsHtml, route};
 
 app.addEventListener("click", ev => {
   const b = ev.target.closest("[data-act]");
