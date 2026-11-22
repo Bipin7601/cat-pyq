@@ -90,7 +90,7 @@ const checks = {
       if (href !== '#paper-2023-1') throw new Error('untimed href ' + href);
       if (await page.locator('nav a', {hasText: 'Add questions'}).count()) throw new Error('nav has Add questions');
       const navTexts = (await page.locator('nav a').allInnerTexts()).join('|');
-      if (navTexts !== 'Home|Practice by topic|Full papers') throw new Error('nav: ' + navTexts);
+      if (navTexts !== 'Practice|Full papers') throw new Error('nav: ' + navTexts);
       if (await box.locator('.last-result').count()) throw new Error('last result shown without data');
       await page.evaluate(() => localStorage.setItem('catpyq.result.2023-1.full', JSON.stringify({score: {total: 92, max: 198}, finishedAt: 1})));
       await page.reload();
@@ -102,7 +102,7 @@ const checks = {
       await page.reload();
       await page.waitForSelector('#home-QA');
       const links = await box.locator('a.last-result').evaluateAll(as => as.map(a => a.getAttribute('href') + '=' + a.textContent.trim()));
-      if (links.join('|') !== '#review-2023-1-full=Last full test: 92 / 198 \u00b7 Review|#review-2023-1-QA=Last QA test: 12 / 66 \u00b7 Review')
+      if (links.join('|') !== '#review-2023-1-full=Last full test: 92 / 198|#review-2023-1-QA=Last QA test: 12 / 66')
         throw new Error('last result links: ' + links.join('|'));
       const below = await box.evaluate(b => !!(b.querySelector('.tests').compareDocumentPosition(b.querySelector('.last-result')) & Node.DOCUMENT_POSITION_FOLLOWING));
       if (!below) throw new Error('last result is not under the buttons');
@@ -198,7 +198,7 @@ const checks = {
       eq('all count', await page.locator('.r-q:not([hidden])').count(), 66);
       await page.click('a.brand');
       const lastLink = page.locator('.pbox', {hasText: 'Slot 1'}).filter({hasText: '2023'}).locator('a.last-result');
-      eq('last result', (await lastLink.innerText()).trim(), `Last full test: ${want} / 198 \u00b7 Review`);
+      eq('last result', (await lastLink.innerText()).trim(), `Last full test: ${want} / 198`);
       // the review can be reopened from the paper box
       await lastLink.click();
       await page.waitForSelector('.t-review h1');
@@ -346,22 +346,39 @@ const checks = {
       page.on('request', r => { if (/\/data\/(q|s)\//.test(r.url())) bad.push(r.url()); });
       await page.goto(BASE);
       await page.waitForSelector('#home-QA');
-      if (await page.locator('#home-DILR').count()) throw new Error('public: #home-DILR present');
+      const dilr = await page.evaluate(() => fetch('data/meta.json').then(r => r.json()).then(m => !!(m.features && m.features.dilr)));
       const box = page.locator('.pbox', {hasText: /CAT 2023.*Slot 1/});
       const btns = (await box.locator('.tests button').allInnerTexts()).map(t => t.trim());
-      if (btns.join('|') !== 'VARC test|QA test') throw new Error('public: buttons ' + btns.join('|'));
-      await page.goto(BASE + '#test-2023-1-full');
-      await page.waitForSelector('.t-panel');
-      if (!(await page.locator('.t-panel').innerText()).includes('isn\u2019t available yet')) throw new Error('public: full route panel');
+      if (dilr) {
+        // DILR retyped: everything is on, and set directions render from text + the site's own images.
+        if (!(await page.locator('#home-DILR').count())) throw new Error('public: #home-DILR missing');
+        if (btns.join('|') !== 'Complete test|VARC test|DILR test|QA test') throw new Error('public: buttons ' + btns.join('|'));
+        await page.goto(BASE + '#practice');
+        await page.click('[data-act=sec][data-sec=DILR]');
+        await page.waitForSelector('.set .directions');
+        const dirImgs = await page.$$eval('.set .directions img', els => els.map(e => e.getAttribute('src')));
+        if (dirImgs.some(s => !/^data\/dimg\//.test(s))) throw new Error('public: directions image src ' + dirImgs.join(', '));
+        // Lazy images only load once on screen: scroll to the first set that has one, then wait (bounded) for it.
+        const firstImg = page.locator('.set .directions img').first();
+        await firstImg.scrollIntoViewIfNeeded();
+        await page.waitForFunction(el => el.complete && el.naturalWidth > 0, await firstImg.elementHandle(), {timeout: 10000})
+          .catch(() => { throw new Error('public: first directions image did not load'); });
+      } else {
+        if (await page.locator('#home-DILR').count()) throw new Error('public: #home-DILR present');
+        if (btns.join('|') !== 'VARC test|QA test') throw new Error('public: buttons ' + btns.join('|'));
+        await page.goto(BASE + '#test-2023-1-full');
+        await page.waitForSelector('.t-panel');
+        if (!(await page.locator('.t-panel').innerText()).includes('isn\u2019t available yet')) throw new Error('public: full route panel');
+      }
       await page.goto(BASE + '#practice');
       await page.click('[data-act=sec][data-sec=QA]');
-      if (await page.locator('[data-act=sec][data-sec=DILR]').count()) throw new Error('public: DILR section switch');
+      if (!dilr && await page.locator('[data-act=sec][data-sec=DILR]').count()) throw new Error('public: DILR section switch');
       await page.locator('[data-act=reveal]').first().click();
       await page.waitForSelector('.solution .expl, .solution .empty-note');
       await page.waitForFunction(() => /Explanation coming soon/.test(document.querySelector('.solution').innerText));
       await page.goto(BASE + '#paper-2023-1');
       await page.waitForSelector('.seg');
-      if (await page.locator('[data-act=psec][data-sec=DILR]').count()) throw new Error('public: paper DILR tab');
+      if (!dilr && await page.locator('[data-act=psec][data-sec=DILR]').count()) throw new Error('public: paper DILR tab');
       if (await page.locator('details.orig').count()) throw new Error('public: original-paper link');
       if (bad.length) throw new Error('public: image requests ' + bad.join(', '));
     });

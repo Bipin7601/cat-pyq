@@ -7,7 +7,7 @@
   const STATE_LABEL = {"answered": "answered", "not-answered": "not answered", "marked": "marked for review",
     "answered-marked": "answered and marked for review", "not-visited": "not visited"};
   const LEGEND = [["answered", "Answered"], ["not-answered", "Not answered"], ["marked", "Marked for review"],
-    ["answered-marked", "Answered & marked"], ["not-visited", "Not visited"]];
+    ["answered-marked", "Answered and marked"], ["not-visited", "Not visited"]];
   const ROUTE = /^(test|review)-(\d{4}-\d)-(full|VARC|DILR|QA)$/;
   const WARN_MS = 5 * 60 * 1000;
 
@@ -33,7 +33,7 @@
   function go(hash) {
     if (location.hash === "#" + hash) A().route(); else location.hash = hash;
   }
-  function title(paper, kind) { return `${A().paperLabel(paper)} \u00b7 ${KIND_LABEL[kind]}`; }
+  function title(paper, kind) { return `${A().paperLabel(paper)}, ${KIND_LABEL[kind].toLowerCase()}`; }
   function startButton(paper, kind, label) {
     return `<button type="button" class="btn primary" data-act="start-test" data-paper="${paper}" data-kind="${kind}">${label}</button>`;
   }
@@ -63,7 +63,7 @@
       <h3 id="t-modal-h">You have this test in progress</h3>
       <p>${esc(title(paper, kind))}. ${a.finished ? "Its time has run out; resume to see the result." : "The clock keeps running while you are away."}</p>
       <div class="t-modal-actions">
-        <button type="button" class="btn primary" data-act="t-resume" ${data}>Resume \u00b7 ${esc(left)}</button>
+        <button type="button" class="btn primary" data-act="t-resume" ${data}>Resume (${esc(left)})</button>
         <button type="button" class="btn danger" data-act="t-restart" ${data}>Start over</button>
         <button type="button" class="btn" data-act="t-cancel">Cancel</button>
       </div></div>`;
@@ -140,7 +140,7 @@
     const a = S.a, esc = A().esc, ms = Core.remainingMs(a, Date.now());
     appEl().innerHTML = `<div class="tscreen" id="tscreen">
       <header class="t-head">
-        <div class="t-title"><span class="eyebrow">Timed test</span><b>${esc(A().paperLabel(S.paper))}</b> \u00b7 ${KIND_LABEL[S.kind]}</div>
+        <div class="t-title"><b>${esc(A().paperLabel(S.paper))}</b><span>${KIND_LABEL[S.kind]}</span></div>
         <ol class="t-strip" aria-label="Sections">${a.sections.map((s, i) => {
           const cls = i < a.secIndex ? "done" : i === a.secIndex ? "active" : "";
           return `<li data-sec="${s}" class="${cls}"${i === a.secIndex ? ' aria-current="step"' : ""}><span>${s}</span></li>`;
@@ -169,7 +169,7 @@
     if (!isSet || S.shownSet !== u.id) {
       main.className = "t-main" + (isSet ? " has-dir" : "");
       main.innerHTML = (isSet ? `<section class="t-dir" id="t-dir" aria-label="Directions">
-          <div class="eyebrow">Directions \u00b7 questions ${u.questions.map(x => S.qs.findIndex(y => y.id === x.id) + 1).filter(Boolean).join(", ")}</div>
+          <h4>Directions</h4><span class="src">${forQuestions(u.questions.map(x => S.qs.findIndex(y => y.id === x.id) + 1).filter(Boolean))}</span>
           ${A().directionsHtml(u)}</section>` : "") + `<section class="t-q" id="t-q"></section>`;
       S.shownSet = isSet ? u.id : null;
       const dir = $("t-dir");
@@ -178,6 +178,13 @@
     const box = $("t-q");
     box.innerHTML = questionHtml(q, u);
     A().observeImgs(box); A().typeset(box);
+  }
+  // "For questions 5 to 8" when the numbers run on, else "For questions 5, 7 and 9"
+  function forQuestions(ns) {
+    if (!ns.length) return "";
+    if (ns.length === 1) return `For question ${ns[0]}`;
+    if (ns.every((n, i) => !i || n === ns[i - 1] + 1)) return `For questions ${ns[0]} to ${ns[ns.length - 1]}`;
+    return `For questions ${ns.slice(0, -1).join(", ")} and ${ns[ns.length - 1]}`;
   }
   function questionHtml(q, u) {
     const esc = A().esc, L = A().LETTERS, i = S.qs.indexOf(q), last = i === S.qs.length - 1;
@@ -191,16 +198,15 @@
       const {n, compact} = A().optionLayout(q);
       h += `<ol class="${compact ? "optrow" : "opts"} t-opts">${Array.from({length: n}, (_, k) => {
         const on = v !== undefined && Number(v) === k;
-        return `<li><button type="button" class="opt${on ? " chosen" : ""}" data-act="t-pick" data-v="${k}" aria-pressed="${on}" aria-label="Option ${L[k]}"><span class="k">${L[k]}</span>${A().optionBodyHtml(q, u, k)}</button></li>`;
+        return `<li><button type="button" class="opt${on ? " chosen" : ""}" data-act="t-pick" data-v="${k}" aria-pressed="${on}" aria-label="Option ${L[k]}"><span class="k" aria-hidden="true">${L[k]}</span>${A().optionBodyHtml(q, u, k)}</button></li>`;
       }).join("")}</ol>`;
     }
     const mk = !!S.a.marked[q.id];
     h += `<div class="t-actions">
       <button type="button" class="btn small" data-act="t-mark" aria-pressed="${mk}">${mk ? "Unmark review" : "Mark for review"}</button>
       <button type="button" class="btn small" data-act="t-clear">Clear response</button>
-      <span class="t-gap"></span>
-      <button type="button" class="btn small" data-act="t-prev"${i <= 0 ? " disabled" : ""}>\u25c0 Previous</button>
-      <button type="button" class="btn small primary" data-act="t-next"${last ? " disabled" : ""}>Next \u25b6</button></div>`;
+      <span class="t-nav"><button type="button" class="btn small" data-act="t-prev"${i <= 0 ? " disabled" : ""}>Previous question</button>
+      <button type="button" class="btn small primary" data-act="t-next"${last ? " disabled" : ""}>Next question</button></span></div>`;
     return h;
   }
   function syncAnswerUI() {
@@ -220,7 +226,7 @@
   // blur (between mousedown and click), so replacing the buttons there would swallow that click.
   function buildSide() {
     const btns = S.qs.map((q, i) => `<button type="button" class="pal" data-act="t-jump" data-i="${i}">${i + 1}</button>`).join("");
-    $("t-side").innerHTML = `<div class="eyebrow">${S.sec} \u00b7 ${S.qs.length} questions</div>
+    $("t-side").innerHTML = `<div class="t-side-h"><h3>${S.sec}</h3><span>${S.qs.length} questions</span></div>
       <div class="t-pal" id="t-palette" role="group" aria-label="Questions in ${S.sec}">${btns}</div>
       <ul class="t-legend">${LEGEND.map(([k, l]) => `<li><span class="pal ${k}" aria-hidden="true"></span>${l}<b data-k="${k}">0</b></li>`).join("")}</ul>
       <div id="t-submitbox"></div>`;
@@ -281,8 +287,8 @@
     const esc = A().esc, L = A().LETTERS, tita = q.type === "TITA", v = at.answers[q.id];
     const answered = Core.isAnswered(v), ok = answered && Core.isCorrect(q, v);
     const state = !answered ? "unanswered" : ok ? "correct" : "wrong";
-    let h = `<article class="r-q" data-state="${state}"><div class="r-head"><b>Question ${i + 1}</b><span class="chip">${secName}</span>
-      <span class="chip">${tita ? "TITA" : "MCQ"}</span>${q.n ? `<span class="src">Q${esc(q.n)} in the paper</span>` : ""}
+    let h = `<article class="r-q" data-state="${state}"><div class="r-head"><b>${secName} question ${i + 1}</b>
+      ${q.n ? `<span class="src">Q${esc(q.n)} in the paper</span>` : ""}<span class="chip">${tita ? "TITA" : "MCQ"}</span>
       <span class="chip ${ok ? "ok" : state === "wrong" ? "bad" : ""}">${!answered ? "Not attempted" : ok ? "Correct" : "Wrong"}</span></div>`;
     if (u.kind === "set") {
       h += `<details class="r-dir"><summary>Set directions</summary>${A().directionsHtml(u)}</details>`;
@@ -297,9 +303,9 @@
     } else {
       const {n, compact} = A().optionLayout(q), right = Number(q.answer), pick = answered ? Number(v) : -1;
       h += `<ol class="${compact ? "optrow" : "opts"}">${Array.from({length: n}, (_, k) => {
-        const cls = k === right ? "correct" : k === pick ? "wrong" : "";
-        const mark = compact ? "" : (k === right ? (k === pick ? "✓ Your pick · Answer" : "Answer") : k === pick ? "✗ Your pick" : "");
-        return `<li><div class="opt ${cls}" aria-label="Option ${L[k]}${k === right ? ", correct" : ""}${k === pick ? ", your pick" : ""}"><span class="k">${L[k]}</span>${A().optionBodyHtml(q, u, k)}<span class="mark">${mark}</span></div></li>`;
+        const cls = k === right ? (k === pick ? "correct picked" : "correct") : k === pick ? "wrong" : "";
+        const mark = compact ? "" : (k === right ? (k === pick ? "Your answer, correct" : "Correct answer") : k === pick ? "Your answer" : "");
+        return `<li><div class="opt ${cls}" aria-label="Option ${L[k]}${k === right ? ", correct" : ""}${k === pick ? ", your pick" : ""}"><span class="k" aria-hidden="true">${L[k]}</span>${A().optionBodyHtml(q, u, k)}<span class="mark">${mark}</span></div></li>`;
       }).join("")}</ol>
         <div class="r-ans">${answered ? `<span class="${ok ? "ok" : "bad"}">Your answer: ${L[pick] || esc(v)}</span>` : "<span>Not attempted</span>"}
         <span>Correct answer: <b>${L[right] || esc(q.answer)}</b></span></div>`;
@@ -332,13 +338,13 @@
     const blocks = secs.map(s => Core.sectionQuestions(A().items, paper, s).map((q, i) => {
       return reviewQuestion(q, i, s, at, A().items.find(x => x.id === q.unitId) || q);
     }).join("")).join("");
-    appEl().innerHTML = `<section class="t-review"><div class="eyebrow">${esc(title(paper, kind))}</div><h1>Review</h1>
-      <div class="r-summary"><p class="t-score">Total score <b>${sc.total} / ${sc.max}</b></p>
-        <table class="r-table"><thead><tr><th>Section</th><th>Score</th><th>Attempted</th><th>Correct</th><th>Wrong</th><th>Unanswered</th><th>Accuracy</th><th>Time used</th></tr></thead><tbody>${rows}</tbody>${foot}</table></div>
-      <div class="r-filters" role="group" aria-label="Filter questions">${FILTERS.map(([k, l]) =>
-        `<button type="button" class="btn small" data-act="r-filter" data-f="${k}" aria-pressed="${k === "all"}">${l}</button>`).join("")}</div>
+    appEl().innerHTML = `<section class="t-review"><h1>Review: ${esc(title(paper, kind))}</h1>
+      <div class="r-summary"><p class="t-score"><span>Total score</span><b>${sc.total} / ${sc.max}</b></p>
+        <div class="r-table-wrap"><table class="r-table"><thead><tr><th>Section</th><th>Score</th><th>Attempted</th><th>Correct</th><th>Wrong</th><th>Unanswered</th><th>Accuracy</th><th>Time used</th></tr></thead><tbody>${rows}</tbody>${foot}</table></div></div>
+      <div class="seg r-filters" role="group" aria-label="Filter questions">${FILTERS.map(([k, l]) =>
+        `<button type="button" data-act="r-filter" data-f="${k}" aria-pressed="${k === "all"}">${l}</button>`).join("")}</div>
       <div id="r-list">${blocks || `<p class="empty-note">No questions are loaded for this paper.</p>`}</div>
-      <p><a href="#papers">Back to Full papers</a></p></section>`;
+      <p><a href="#papers">Back to full papers</a></p></section>`;
     A().observeImgs(appEl()); A().typeset(appEl());
   }
   function setFilter(f) {
