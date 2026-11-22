@@ -25,4 +25,8 @@ node --test
 
 Questions are from past CAT papers; answers are the official keys; explanations are original.
 
-DILR sets and explanations are being added in batches.
+Every question, including all DILR sets, has an explanation.
+
+## Design
+
+The Figma design file is in [`design/`](design/), with steps to open it.
