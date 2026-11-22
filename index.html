@@ -138,6 +138,8 @@ select:hover,input[type=text]:hover:not(:disabled){border-color:var(--pencil)}
 .tally b{font:600 26px/1.15 var(--f-ui);font-variant-numeric:tabular-nums}
 .tally span{font-size:14px;color:var(--pencil)}
 .tally [data-k=correct] b{color:var(--ok)} .tally [data-k=wrong] b{color:var(--bad)}
+.tally .tally-reset{margin-left:auto;align-self:center;display:flex;gap:8px;align-items:center}
+.tally .tally-reset .btn[disabled]{opacity:.45;cursor:default}
 
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:1px solid var(--rule);background:var(--sheet);color:var(--ink);padding:8px 14px;border-radius:var(--rc);cursor:pointer;font-weight:500;font-size:15px;text-decoration:none;line-height:1.3}
 .btn:hover{border-color:var(--blue);color:var(--blue)}
@@ -725,7 +727,8 @@ function picker(id, key, allLabel, opts, sel){
 function tallyHtml(){
   const t = Core.tally(Core.filterUnits(items, {...filters, status:"all"}, progress), progress);
   const cells = [["questions","Questions",t.questions],["attempted","Attempted",t.attempted],["correct","Correct",t.correct],["wrong","Wrong",t.wrong],["notAttempted","Not attempted",t.notAttempted],["accuracy","Accuracy",t.accuracy===null?"\u2014":Math.round(t.accuracy*100)+"%"]];
-  return `<div class="tally" id="tally" aria-label="Session tally">${cells.map(([k,l,v])=>`<div data-k="${k}"><b>${v}</b><span>${l}</span></div>`).join("")}</div>`;
+  const reset = `<div class="confirm tally-reset" id="reset-sel"><button class="btn small" data-act="ask-reset-sel" ${t.attempted ? "" : "disabled"} title="Clear your answers for the questions in this selection">Reset and start again</button></div>`;
+  return `<div class="tally" id="tally" aria-label="Session tally">${cells.map(([k,l,v])=>`<div data-k="${k}"><b>${v}</b><span>${l}</span></div>`).join("")}${reset}</div>`;
 }
 const filtered = () => Core.filterUnits(items, filters, progress);
 function viewPractice(){
@@ -846,6 +849,11 @@ app.addEventListener("click", ev => {
   }
   else if(act === "cancel") route();
   else if(act === "do-reset-all"){ progress = {}; revealed.clear(); store.set(K_PROG, progress); route(); }
+  else if(act === "do-reset-sel"){
+    // clear answers for every question in the current selection (section + topics + papers), so the tally starts from zero
+    Core.filterUnits(items, {...filters, status:"all"}, progress).flatMap(questionsOf).forEach(q => { delete progress[q.id]; revealed.delete(q.id); });
+    store.set(K_PROG, progress); route();
+  }
   else if(act === "do-reset-paper"){
     const id = location.hash.slice(7);
     items.filter(u => u.paper === id).flatMap(questionsOf).forEach(q => { delete progress[q.id]; revealed.delete(q.id); });

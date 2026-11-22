@@ -73,6 +73,28 @@ const checks = {
       await eq('notAttempted', '63'); await eq('accuracy', '0%');
     });
   },
+  async practiceReset() {
+    await withPage(async page => {
+      await page.goto(BASE + '#practice');
+      await page.evaluate(() => localStorage.clear());
+      await page.reload();
+      await page.click('[data-act=sec][data-sec=QA]');
+      await page.click('#f-topics');
+      await page.check('#f-topics-panel input[value="Averages"]');
+      await page.keyboard.press('Escape');
+      const val = n => page.locator('#tally [data-k=' + n + '] b').innerText();
+      if (!(await page.locator('#reset-sel button').isDisabled())) throw new Error('reset: enabled with nothing attempted');
+      await page.locator('.list button.opt[data-act=pick]').first().click();
+      await page.waitForSelector('.chip.ok, .chip.bad', {timeout: 5000});
+      if ((await val('attempted')) !== '1') throw new Error('reset: attempted not 1 before reset');
+      await page.click('#reset-sel button[data-act=ask-reset-sel]');
+      await page.click('#reset-sel button[data-act=do-reset-sel]');
+      await page.waitForFunction(() => document.querySelector('#tally [data-k=attempted] b').textContent === '0');
+      if ((await val('correct')) !== '0' || (await val('wrong')) !== '0') throw new Error('reset: correct/wrong not 0');
+      if ((await val('notAttempted')) !== '24') throw new Error('reset: not attempted ' + await val('notAttempted'));
+      if (await page.locator('.list .chip.ok, .list .chip.bad').count()) throw new Error('reset: a card still shows a result');
+    });
+  },
   async homeLayout() {
     await withPage(async page => {
       await page.goto(BASE + '#home');
