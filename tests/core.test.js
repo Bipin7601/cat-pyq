@@ -255,13 +255,53 @@ test('sectionStats', () => {
     r1: {ms: 240000, state: 'done'}, v1: {ms: 60000, state: 'done'},
   };
   const s = Core.sectionStats(units, progress, times, ['QA', 'DILR', 'VARC']);
-  assert.deepEqual(s.rows.QA, {attempted: 3, correct: 2, wrong: 1, accuracy: 2 / 3, perQuestionMs: 90000, perSetMs: null});
-  assert.deepEqual(s.rows.DILR, {attempted: 3, correct: 2, wrong: 1, accuracy: 2 / 3, perQuestionMs: 300000, perSetMs: 600000});
+  assert.deepEqual(s.rows.QA, {attempted: 3, correct: 2, wrong: 1, skipped: 0, accuracy: 2 / 3, perQuestionMs: 90000, perSetMs: null});
+  assert.deepEqual(s.rows.DILR, {attempted: 3, correct: 2, wrong: 1, skipped: 0, accuracy: 2 / 3, perQuestionMs: 300000, perSetMs: 600000});
   assert.equal(s.rows.VARC.perQuestionMs, 100000);  // (240000 + 60000) / 3
   assert.equal(s.rows.VARC.perSetMs, 240000);
-  assert.deepEqual(s.total, {attempted: 9, correct: 6, wrong: 3, accuracy: 6 / 9, perQuestionMs: (180000 + 600000 + 300000) / 7, perSetMs: null});
+  assert.deepEqual(s.total, {attempted: 9, correct: 6, wrong: 3, skipped: 0, accuracy: 6 / 9, perQuestionMs: (180000 + 600000 + 300000) / 7, perSetMs: null});
   // a set marked done with nothing answered is ignored; empty sections give nulls
   const e = Core.sectionStats(units, {}, {d2: {ms: 5, state: 'done'}}, ['QA', 'DILR']);
-  assert.deepEqual(e.rows.DILR, {attempted: 0, correct: 0, wrong: 0, accuracy: null, perQuestionMs: null, perSetMs: null});
+  assert.deepEqual(e.rows.DILR, {attempted: 0, correct: 0, wrong: 0, skipped: 0, accuracy: null, perQuestionMs: null, perSetMs: null});
   assert.equal(Object.keys(e.rows).join(), 'QA,DILR');
+});
+
+test('timerStart records answers already given (pre) and keeps it through pause and stop', () => {
+  let r = Core.timerStart(null, {}, 's', 0, 2);
+  assert.deepEqual(r.clock, {unitId: 's', startedAt: 0, baseMs: 0, pre: 2});
+  r = Core.timerPause(r.clock, r.times, 1000);
+  assert.deepEqual(r.times.s, {ms: 1000, state: 'paused', pre: 2});
+  r = Core.timerStart(r.clock, r.times, 's', 5000, 9);          // resume keeps the original pre
+  assert.equal(r.clock.pre, 2);
+  r = Core.timerStop(r.clock, r.times, 's', 6000);
+  assert.deepEqual(r.times.s, {ms: 2000, state: 'done', pre: 2});
+});
+
+test('setFinished counts skipped questions as dealt with', () => {
+  const s = {kind: 'set', questions: [{id: 'x1'}, {id: 'x2'}]};
+  assert.equal(Core.setFinished(s, {x1: {ok: true}}, {x2: true}), true);
+  assert.equal(Core.setFinished(s, {x1: {ok: true}}, {}), false);
+  assert.equal(Core.setFinished(s, {x1: {ok: true}}), false);
+});
+
+test('sectionStats: skipped column and late-started sets', () => {
+  const units = [
+    {id: 'q1', kind: 'q', section: 'QA'}, {id: 'q2', kind: 'q', section: 'QA'},
+    {id: 'd1', kind: 'set', section: 'DILR', questions: [{id: 'a'}, {id: 'b'}, {id: 'c'}, {id: 'd'}]},
+  ];
+  const progress = {q1: {ok: true}, a: {ok: true}, b: {ok: true}, c: {ok: false}, d: {ok: true}};
+  const skipped = {q2: true};
+  const times = {q1: {ms: 60000, state: 'done'}, d1: {ms: 120000, state: 'done', pre: 2}};  // timer started after 2 answers
+  const s = Core.sectionStats(units, progress, times, ['QA', 'DILR'], skipped);
+  assert.equal(s.rows.QA.skipped, 1);
+  assert.equal(s.rows.QA.attempted, 1);
+  assert.equal(s.rows.DILR.skipped, 0);
+  assert.equal(s.rows.DILR.perQuestionMs, 60000, '120000 over the 2 answers given while timed');
+  assert.equal(s.rows.DILR.perSetMs, null, 'a late-started set is not a full timed set');
+  assert.equal(s.total.skipped, 1);
+  // pre equal to all answers -> nothing timed
+  const z = Core.sectionStats(units, progress, {d1: {ms: 5, state: 'done', pre: 4}}, ['DILR']);
+  assert.equal(z.rows.DILR.perQuestionMs, null);
+  // skipped defaults to none
+  assert.equal(Core.sectionStats(units, progress, {}, ['QA']).rows.QA.skipped, 0);
 });

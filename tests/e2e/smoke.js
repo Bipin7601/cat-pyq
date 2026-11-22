@@ -24,6 +24,53 @@ async function withPage(fn) {
 }
 
 const checks = {
+  async practiceSkip() {
+    await withPage(async page => {
+      await page.goto(BASE + '#practice');
+      await page.evaluate(() => localStorage.clear());
+      await page.reload();
+      await page.click('[data-act=sec][data-sec=QA]');
+      const id1 = (await page.locator('.list > article.card').nth(0).getAttribute('id')).slice(2);
+      const card = () => page.locator(`#c-${id1}`);
+      const cell = (sec, k) => page.locator(`#secstats tr[data-sec=${sec}] [data-k=${k}]`).innerText().then(t => t.trim());
+      const fail = m => { throw new Error('practiceSkip: ' + m); };
+      // a timed single question: Show solution = skipped, time thrown away, can't answer
+      await card().locator('[data-act=t-start]').click();
+      await card().locator('[data-act=reveal]').click();
+      if (!(await card().locator('.chip.skip').count())) fail('no Skipped chip');
+      if (await card().locator('button.opt[data-act=pick]:not([disabled])').count()) fail('options still answerable');
+      if (await card().locator('.ptimer').count()) fail('timer still shown');
+      if (await page.locator('[data-timer]').count()) fail('clock still running');
+      const t = await page.evaluate(id => JSON.parse(localStorage.getItem('catpyq.times.v1') || '{}')[id], id1);
+      if (t) fail('time kept: ' + JSON.stringify(t));
+      if (await cell('QA', 'skipped') !== '1' || await cell('QA', 'attempted') !== '0') fail('stats row');
+      if ((await page.locator('#tally [data-k=skipped] b').innerText()).trim() !== '1') fail('tally skipped');
+      // persists across reload; Try again brings it back
+      await page.reload();
+      if (!(await card().locator('.chip.skip').count())) fail('skip lost on reload');
+      await card().locator('[data-act=retry]').click();
+      if (await card().locator('.chip.skip').count()) fail('still skipped after Try again');
+      if (!(await card().locator('[data-act=t-start]').count())) fail('no Start timer after Try again');
+      if (await cell('QA', 'skipped') !== '0') fail('skipped not cleared');
+      // in a set: Show solution pauses the set timer; Show set explanation skips the rest and stops it
+      await page.click('[data-act=sec][data-sec=DILR]');
+      const set = page.locator('.list > article.card.set', {has: page.locator('[data-act=setsol]')}).first();
+      const sid = (await set.getAttribute('id')).slice(2);
+      const S = () => page.locator(`#c-${sid}`);
+      await S().locator('.set-head [data-act=t-start]').click();
+      const q0 = S().locator('.set-q').nth(0);
+      if (await q0.locator('button.opt[data-act=pick]').count()) await q0.locator('button.opt[data-act=pick]').first().click();
+      else { await q0.locator('.tita input').fill('1'); await q0.locator('[data-act=tita]').click(); }
+      await S().locator('.set-q').nth(1).locator('[data-act=reveal]').click();
+      if ((await S().locator('.set-head [data-act=t-start]').innerText()).trim() !== 'Resume') fail('set timer not paused by Show solution');
+      if (!(await S().locator('.set-q').nth(1).locator('.chip.skip').count())) fail('set question not skipped');
+      await S().locator('[data-act=setsol]').click();
+      if (!/^Took /.test((await S().locator('.set-head .ptimer').innerText()).trim())) fail('set timer not stopped by set explanation');
+      const nq = await S().locator('.set-q').count();
+      if (await S().locator('.set-q .chip.skip').count() !== nq - 1) fail('remaining set questions not skipped');
+      if (await cell('DILR', 'skipped') !== String(nq - 1)) fail('DILR skipped count');
+    });
+  },
   async practiceTimerEdges() {
     await withPage(async page => {
       await page.goto(BASE + '#practice');

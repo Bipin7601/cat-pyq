@@ -149,20 +149,25 @@
     if (clock && clock.unitId === unitId) return runMs(clock, now);
     return times[unitId] ? times[unitId].ms : null;
   }
+  // pre = questions of a set already answered when its timer first started (kept only when > 0)
+  const entry = (ms, state, pre) => pre ? {ms, state, pre} : {ms, state};
   function timerPause(clock, times, now) {
     if (!clock) return {clock, times};
-    return {clock: null, times: {...times, [clock.unitId]: {ms: runMs(clock, now), state: "paused"}}};
+    return {clock: null, times: {...times, [clock.unitId]: entry(runMs(clock, now), "paused", clock.pre)}};
   }
-  function timerStart(clock, times, unitId, now) {
+  function timerStart(clock, times, unitId, now, pre) {
     const t = times[unitId];
     if ((t && t.state === "done") || (clock && clock.unitId === unitId)) return {clock, times};
     const paused = timerPause(clock, times, now).times;
-    return {clock: {unitId, startedAt: now, baseMs: t ? t.ms : 0}, times: paused};
+    const p = t ? t.pre : pre;
+    const c = {unitId, startedAt: now, baseMs: t ? t.ms : 0};
+    if (p) c.pre = p;
+    return {clock: c, times: paused};
   }
   function timerStop(clock, times, unitId, now) {
-    if (clock && clock.unitId === unitId) return {clock: null, times: {...times, [unitId]: {ms: runMs(clock, now), state: "done"}}};
+    if (clock && clock.unitId === unitId) return {clock: null, times: {...times, [unitId]: entry(runMs(clock, now), "done", clock.pre)}};
     const t = times[unitId];
-    if (t && t.state === "paused") return {clock, times: {...times, [unitId]: {ms: t.ms, state: "done"}}};
+    if (t && t.state === "paused") return {clock, times: {...times, [unitId]: entry(t.ms, "done", t.pre)}};
     return {clock, times};
   }
   function clearTimes(clock, times, unitIds) {
@@ -170,10 +175,11 @@
     unitIds.forEach(id => { delete next[id]; });
     return {clock: clock && unitIds.includes(clock.unitId) ? null : clock, times: next};
   }
-  function setFinished(unit, progress) { return unit.questions.every(q => !!progress[q.id]); }
+  function setFinished(unit, progress, skipped) { return unit.questions.every(q => !!progress[q.id] || !!(skipped && skipped[q.id])); }
 
-  function sectionStats(units, progress, times, sections) {
-    const acc = () => ({attempted: 0, correct: 0, timedMs: 0, timedQs: 0, setMs: 0, sets: 0, hasSets: false});
+  function sectionStats(units, progress, times, sections, skipped) {
+    skipped = skipped || {};
+    const acc = () => ({attempted: 0, correct: 0, skipped: 0, timedMs: 0, timedQs: 0, setMs: 0, sets: 0, hasSets: false});
     const raw = {};
     sections.forEach(s => { raw[s] = acc(); });
     const all = acc();
@@ -182,15 +188,17 @@
       const qs = questionsOf(u);
       const answered = qs.filter(q => progress[q.id]);
       const correct = answered.filter(q => progress[q.id].ok).length;
-      const t = times[u.id], done = t && t.state === "done" && answered.length > 0;
+      const nSkip = qs.filter(q => !progress[q.id] && skipped[q.id]).length;
+      const t = times[u.id], pre = (t && t.pre) || 0, timedQs = answered.length - pre;
+      const done = t && t.state === "done" && timedQs > 0;
       [r, all].forEach(x => {
-        x.attempted += answered.length; x.correct += correct;
-        if (done) { x.timedMs += t.ms; x.timedQs += answered.length; }
+        x.attempted += answered.length; x.correct += correct; x.skipped += nSkip;
+        if (done) { x.timedMs += t.ms; x.timedQs += timedQs; }
       });
-      if (u.kind === "set") { r.hasSets = true; if (done) { r.setMs += t.ms; r.sets++; } }
+      if (u.kind === "set") { r.hasSets = true; if (done && !pre) { r.setMs += t.ms; r.sets++; } }
     });
     const row = (x, withSets) => ({
-      attempted: x.attempted, correct: x.correct, wrong: x.attempted - x.correct,
+      attempted: x.attempted, correct: x.correct, wrong: x.attempted - x.correct, skipped: x.skipped,
       accuracy: x.attempted ? x.correct / x.attempted : null,
       perQuestionMs: x.timedQs ? x.timedMs / x.timedQs : null,
       perSetMs: withSets && x.sets ? x.setMs / x.sets : null,

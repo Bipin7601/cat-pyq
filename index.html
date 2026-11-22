@@ -178,6 +178,8 @@ select:hover,input[type=text]:hover:not(:disabled){border-color:var(--pencil)}
 .chip.ok,.chip.bad{font-weight:600;display:inline-flex;align-items:center;gap:6px}
 .chip.ok::before,.chip.bad::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor}
 .chip.ok{color:var(--ok)} .chip.bad{color:var(--bad)}
+.chip.skip{font-weight:600;display:inline-flex;align-items:center;gap:6px;color:var(--pencil)}
+.chip.skip::before{content:"";width:8px;height:8px;border-radius:50%;border:1.5px solid currentColor;box-sizing:border-box}
 .qtext{margin:0 0 16px;overflow-wrap:anywhere;font:16px/1.65 var(--f-read);max-width:70ch}
 .qtext p{margin:0 0 10px} .qtext p:last-child{margin:0}
 
@@ -473,6 +475,11 @@ const K_TIME = "catpyq.times.v1";
 let times = store.get(K_TIME, {});              // unit id -> {ms, state: "paused"|"done"} (practice timers)
 if(!times || typeof times !== "object" || Array.isArray(times)) times = {};
 let clock = null, clockTick = null;             // the one running practice timer: {unitId, startedAt, baseMs}
+const K_SKIP = "catpyq.skipped.v1";
+let skipped = store.get(K_SKIP, {});            // qid -> true: solution seen before answering (not counted as attempted)
+if(!skipped || typeof skipped !== "object" || Array.isArray(skipped)) skipped = {};
+const saveSkipped = () => store.set(K_SKIP, skipped);
+const isSkipped = qid => !progress[qid] && !!skipped[qid];
 const saveTimes = () => store.set(K_TIME, times);
 
 /* ---------- data ---------- */
@@ -625,7 +632,7 @@ function srcLine(u, q, n){
 const typeLabel = q => q.type === "TITA" ? "TITA" : "MCQ";
 function statusChip(q){
   const p = progress[q.id];
-  if(!p) return "";
+  if(!p) return isSkipped(q.id) ? `<span class="chip skip">Skipped</span>` : "";
   return p.ok ? `<span class="chip ok">Correct</span>` : `<span class="chip bad">Incorrect</span>`;
 }
 function answerText(q){
@@ -676,12 +683,12 @@ function renderSetSolution(u){
 function qBody(q, u){
   u = u || q;
   const p = progress[q.id];
-  const done = !!p, show = done || revealed.has(q.id);
+  const done = !!p, skip = isSkipped(q.id), show = done || skip || revealed.has(q.id), lock = done || skip;
   let h = stemHtml(q, u);
   if(q.type === "TITA"){
     const cls = done ? (p.ok ? "correct" : "wrong") : "";
-    h += `<div class="tita"><input type="text" inputmode="decimal" id="in-${esc(q.id)}" class="${cls}" placeholder="Type your answer" value="${done ? esc(p.v) : ""}" ${done?"disabled":""} aria-label="Your answer">
-      ${done ? `<span class="verdict ${p.ok?"ok":"bad"}">${p.ok?"Correct":"Incorrect"}</span>` : `<button class="btn primary small" data-act="tita" data-q="${esc(q.id)}">Check</button>`}</div>`;
+    h += `<div class="tita"><input type="text" inputmode="decimal" id="in-${esc(q.id)}" class="${cls}" placeholder="Type your answer" value="${done ? esc(p.v) : ""}" ${lock?"disabled":""} aria-label="Your answer">
+      ${done ? `<span class="verdict ${p.ok?"ok":"bad"}">${p.ok?"Correct":"Incorrect"}</span>` : skip ? "" : `<button class="btn primary small" data-act="tita" data-q="${esc(q.id)}">Check</button>`}</div>`;
   }else{
     const {n, compact} = optionLayout(q);
     h += `<ol class="${compact ? "optrow" : "opts"}">${Array.from({length:n}, (_, i) => {
@@ -691,12 +698,12 @@ function qBody(q, u){
       if(done && Number(p.v) === i && p.ok){ cls = "correct picked"; mark = "Your answer"; }
       const say = cls ? `, ${mark.toLowerCase()}` : "";
       if(compact) mark = "";
-      return `<li><button class="opt ${cls}" data-act="pick" data-q="${esc(q.id)}" data-v="${i}" ${done?"disabled":""} aria-label="Option ${LETTERS[i]}${say}"><span class="k" aria-hidden="true">${LETTERS[i]}</span>${optionBodyHtml(q, u, i)}<span class="mark">${mark}</span></button></li>`;
+      return `<li><button class="opt ${cls}" data-act="pick" data-q="${esc(q.id)}" data-v="${i}" ${lock?"disabled":""} aria-label="Option ${LETTERS[i]}${say}"><span class="k" aria-hidden="true">${LETTERS[i]}</span>${optionBodyHtml(q, u, i)}<span class="mark">${mark}</span></button></li>`;
     }).join("")}</ol>`;
   }
   h += `<div class="foot">`;
   if(!show) h += `<button class="btn small" data-act="reveal" data-q="${esc(q.id)}">Show solution</button>`;
-  if(done) h += `<button class="btn small" data-act="retry" data-q="${esc(q.id)}">Try again</button>`;
+  if(lock) h += `<button class="btn small" data-act="retry" data-q="${esc(q.id)}">Try again</button>`;
   h += `</div>`;
   if(show) h += renderSolution(q, u);
   return h;
@@ -731,14 +738,28 @@ function timerHtml(u){
   }
   else if(t && t.state === "paused") h = `<span class="ptime">${Core.fmtDur(t.ms)}</span><button class="btn small" data-act="t-start" data-u="${id}">Resume</button>`;
   else if(t && t.state === "done") h = `<span class="ptime">Took ${Core.fmtDur(t.ms)}</span>`;
-  else if(!(isSet ? Core.setFinished(u, progress) : progress[u.id])) h = `<button class="btn small quiet" data-act="t-start" data-u="${id}">Start timer</button>`;
+  else if(!(isSet ? Core.setFinished(u, progress, skipped) : (progress[u.id] || skipped[u.id]))) h = `<button class="btn small quiet" data-act="t-start" data-u="${id}">Start timer</button>`;
   return h ? `<span class="ptimer" data-unit="${id}">${h}</span>` : "";
 }
 // after an answer: a single question's timer stops; a set's stops once every question is answered
 function stopTimerAfterAnswer(qid){
   const e = qIndex.get(qid); if(!e) return;
   const u = e.unit;
-  if(u.kind !== "set" || Core.setFinished(u, progress)) applyTimer(Core.timerStop(clock, times, u.id, Date.now()));
+  if(u.kind !== "set" || Core.setFinished(u, progress, skipped)) applyTimer(Core.timerStop(clock, times, u.id, Date.now()));
+}
+// a set whose questions are all answered or skipped: its timer stops (and is dropped if nothing was answered)
+function finishSetTimer(u){
+  if(!times[u.id] && !(clock && clock.unitId === u.id)) return;
+  applyTimer(u.questions.some(q => progress[q.id]) ? Core.timerStop(clock, times, u.id, Date.now()) : Core.clearTimes(clock, times, [u.id]));
+}
+// Show solution before answering = skipped: a single question's time is thrown away; a set's timer pauses
+function skipQuestion(qid){
+  const e = qIndex.get(qid); if(!e || progress[qid]) return;
+  skipped[qid] = true; saveSkipped();
+  const u = e.unit;
+  if(u.kind !== "set") applyTimer(Core.clearTimes(clock, times, [u.id]));
+  else if(Core.setFinished(u, progress, skipped)) finishSetTimer(u);
+  else if(clock && clock.unitId === u.id) applyTimer(Core.timerPause(clock, times, Date.now()));
 }
 function qCard(u){
   return `<article class="card" id="c-${esc(u.id)}">
@@ -829,23 +850,25 @@ function picker(id, key, allLabel, opts, sel){
 }
 /* all-time stats per section (everything practised, not just the current filters) */
 function statsHtml(){
-  const st = Core.sectionStats(items, progress, times, SECTIONS);
+  const st = Core.sectionStats(items, progress, times, SECTIONS, skipped);
   const pct = a => a === null ? "\u2014" : Math.round(a * 100) + "%";
   const time = r => r.perQuestionMs === null ? "\u2014"
     : (r.perSetMs !== null ? `${Core.fmtDur(r.perSetMs)} / set \u00b7 ` : "") + `${Core.fmtDur(r.perQuestionMs)} / question`;
-  const cells = (r, total) => `<td data-k="attempted">${r.attempted}</td><td data-k="correct" class="ok">${r.correct}</td><td data-k="wrong" class="bad">${r.wrong}</td><td data-k="accuracy">${pct(r.accuracy)}</td><td data-k="time">${total ? "" : time(r)}</td>`;
+  const cells = (r, total) => `<td data-k="attempted">${r.attempted}</td><td data-k="correct" class="ok">${r.correct}</td><td data-k="wrong" class="bad">${r.wrong}</td><td data-k="skipped">${r.skipped}</td><td data-k="accuracy">${pct(r.accuracy)}</td><td data-k="time">${total ? "" : time(r)}</td>`;
   return `<section class="secstats" id="secstats" aria-labelledby="secstats-h">
     <h2 class="secstats-h" id="secstats-h">Your stats, all practice so far</h2>
     <div class="secstats-wrap"><table>
-      <thead><tr><th scope="col">Section</th><th scope="col">Attempted</th><th scope="col">Correct</th><th scope="col">Wrong</th><th scope="col">Accuracy</th><th scope="col">Avg time</th></tr></thead>
+      <thead><tr><th scope="col">Section</th><th scope="col">Attempted</th><th scope="col">Correct</th><th scope="col">Wrong</th><th scope="col">Skipped</th><th scope="col">Accuracy</th><th scope="col">Avg time</th></tr></thead>
       <tbody>${SECTIONS.map(s => `<tr data-sec="${s}"><th scope="row">${s}</th>${cells(st.rows[s], false)}</tr>`).join("")}</tbody>
       <tfoot><tr data-sec="Total"><th scope="row">Total</th>${cells(st.total, true)}</tr></tfoot>
     </table></div></section>`;
 }
 function tallyHtml(){
-  const t = Core.tally(Core.filterUnits(items, {...filters, status:"all"}, progress), progress);
-  const cells = [["questions","Questions",t.questions],["attempted","Attempted",t.attempted],["correct","Correct",t.correct],["wrong","Wrong",t.wrong],["notAttempted","Not attempted",t.notAttempted],["accuracy","Accuracy",t.accuracy===null?"\u2014":Math.round(t.accuracy*100)+"%"]];
-  const reset = `<div class="confirm tally-reset" id="reset-sel"><button class="btn small" data-act="ask-reset-sel" ${t.attempted ? "" : "disabled"} title="Clear your answers for the questions in this selection">Reset and start again</button></div>`;
+  const sel = Core.filterUnits(items, {...filters, status:"all"}, progress);
+  const t = Core.tally(sel, progress);
+  const nSkip = sel.flatMap(questionsOf).filter(q => isSkipped(q.id)).length;
+  const cells = [["questions","Questions",t.questions],["attempted","Attempted",t.attempted],["correct","Correct",t.correct],["wrong","Wrong",t.wrong],["skipped","Skipped",nSkip],["notAttempted","Not attempted",t.notAttempted - nSkip],["accuracy","Accuracy",t.accuracy===null?"\u2014":Math.round(t.accuracy*100)+"%"]];
+  const reset = `<div class="confirm tally-reset" id="reset-sel"><button class="btn small" data-act="ask-reset-sel" ${t.attempted || nSkip ? "" : "disabled"} title="Clear your answers and skips for the questions in this selection">Reset and start again</button></div>`;
   return `<div class="tally" id="tally" aria-label="Session tally">${cells.map(([k,l,v])=>`<div data-k="${k}"><b>${v}</b><span>${l}</span></div>`).join("")}${reset}</div>`;
 }
 const filtered = () => Core.filterUnits(items, filters, progress);
@@ -955,17 +978,23 @@ app.addEventListener("click", ev => {
     if(!v){ inp && inp.focus(); return; }
     record(qid, v); stopTimerAfterAnswer(qid); rerenderKeepScroll(cardIdOf(qid));
   }
-  else if(act === "reveal"){ revealed.add(qid); rerenderKeepScroll(cardIdOf(qid)); }
-  else if(act === "setsol"){ revealedSets.add(b.dataset.set); rerenderKeepScroll("c-" + b.dataset.set); }
+  else if(act === "reveal"){ skipQuestion(qid); revealed.add(qid); rerenderKeepScroll(cardIdOf(qid)); }
+  else if(act === "setsol"){
+    const u = items.find(x => x.id === b.dataset.set);
+    if(u && u.kind === "set"){ u.questions.forEach(q => { if(!progress[q.id]) skipped[q.id] = true; }); saveSkipped(); finishSetTimer(u); }
+    revealedSets.add(b.dataset.set); rerenderKeepScroll("c-" + b.dataset.set);
+  }
   else if(act === "retry"){
-    delete progress[qid]; revealed.delete(qid); store.set(K_PROG, progress);
+    delete progress[qid]; revealed.delete(qid); store.set(K_PROG, progress); delete skipped[qid]; saveSkipped();
     const e = qIndex.get(qid);
     if(e && e.unit.kind !== "set") applyTimer(Core.clearTimes(clock, times, [e.unit.id])); // a set keeps its time
     rerenderKeepScroll(cardIdOf(qid));
   }
   else if(act === "t-start"){
     const prev = clock && clock.unitId;
-    applyTimer(Core.timerStart(clock, times, b.dataset.u, Date.now()));
+    const su = items.find(x => x.id === b.dataset.u);
+    const pre = su && su.kind === "set" ? su.questions.filter(q => progress[q.id]).length : 0; // answers given before timing
+    applyTimer(Core.timerStart(clock, times, b.dataset.u, Date.now(), pre));
     if(prev && prev !== b.dataset.u && document.getElementById("c-" + prev)) rerenderKeepScroll("c-" + prev);
     rerenderKeepScroll("c-" + b.dataset.u);
   }
@@ -984,18 +1013,18 @@ app.addEventListener("click", ev => {
     box.innerHTML = `<span style="font-size:14px">Are you sure?</span><button class="btn small danger" data-act="do-${what}">Yes, clear</button><button class="btn small" data-act="cancel">Cancel</button>`;
   }
   else if(act === "cancel") route();
-  else if(act === "do-reset-all"){ progress = {}; revealed.clear(); store.set(K_PROG, progress); applyTimer({clock: null, times: {}}); route(); }
+  else if(act === "do-reset-all"){ progress = {}; revealed.clear(); store.set(K_PROG, progress); skipped = {}; saveSkipped(); applyTimer({clock: null, times: {}}); route(); }
   else if(act === "do-reset-sel"){
     // clear answers for every question in the current selection (section + topics + papers), so the tally starts from zero
     const sel = Core.filterUnits(items, {...filters, status:"all"}, progress);
-    sel.flatMap(questionsOf).forEach(q => { delete progress[q.id]; revealed.delete(q.id); });
-    store.set(K_PROG, progress); applyTimer(Core.clearTimes(clock, times, sel.map(u => u.id))); route();
+    sel.flatMap(questionsOf).forEach(q => { delete progress[q.id]; revealed.delete(q.id); delete skipped[q.id]; });
+    store.set(K_PROG, progress); saveSkipped(); applyTimer(Core.clearTimes(clock, times, sel.map(u => u.id))); route();
   }
   else if(act === "do-reset-paper"){
     const id = location.hash.slice(7);
     const inPaper = items.filter(u => u.paper === id);
-    inPaper.flatMap(questionsOf).forEach(q => { delete progress[q.id]; revealed.delete(q.id); });
-    store.set(K_PROG, progress); applyTimer(Core.clearTimes(clock, times, inPaper.map(u => u.id))); route();
+    inPaper.flatMap(questionsOf).forEach(q => { delete progress[q.id]; revealed.delete(q.id); delete skipped[q.id]; });
+    store.set(K_PROG, progress); saveSkipped(); applyTimer(Core.clearTimes(clock, times, inPaper.map(u => u.id))); route();
   }
 });
 app.addEventListener("change", ev => {
