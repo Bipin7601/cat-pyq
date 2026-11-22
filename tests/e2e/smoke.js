@@ -24,6 +24,125 @@ async function withPage(fn) {
 }
 
 const checks = {
+  async practiceTimerEdges() {
+    await withPage(async page => {
+      await page.goto(BASE + '#practice');
+      await page.evaluate(() => localStorage.clear());
+      await page.reload();
+      await page.click('[data-act=sec][data-sec=QA]');
+      const id1 = (await page.locator('.list > article.card').nth(0).getAttribute('id')).slice(2);
+      const btn = () => page.locator(`#c-${id1} [data-act=t-start]`);
+      const state = () => page.evaluate(id => (JSON.parse(localStorage.getItem('catpyq.times.v1') || '{}')[id] || {}).state, id1);
+      // 1. card leaves the screen (section switch) -> the clock pauses
+      await btn().click();
+      await page.click('[data-act=sec][data-sec=VARC]');
+      if (await state() !== 'paused') throw new Error('edges: section switch left the clock running');
+      await page.click('[data-act=sec][data-sec=QA]');
+      if ((await btn().innerText()).trim() !== 'Resume') throw new Error('edges: no Resume after section switch');
+      // 2. page hidden (app/tab switch) -> pauses and shows Resume
+      await btn().click();
+      await page.evaluate(() => {
+        Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'hidden'});
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      if (await state() !== 'paused') throw new Error('edges: hidden page left the clock running');
+      if ((await btn().innerText()).trim() !== 'Resume') throw new Error('edges: no Resume after hiding');
+      if (await page.locator('[data-timer]').count()) throw new Error('edges: a running display is left on screen');
+      // 3. Done only appears once a question in the set is answered
+      await page.reload();
+      await page.click('[data-act=sec][data-sec=DILR]');
+      const head = () => page.locator('.list > article.card.set').first().locator('.set-head');
+      await head().locator('[data-act=t-start]').click();
+      if (await head().locator('[data-act=t-done]').count()) throw new Error('edges: Done shown before any answer');
+      await page.locator('.list > article.card.set').first().locator('.set-q').first().locator('button.opt[data-act=pick]').first().click();
+      if (!(await head().locator('[data-act=t-done]').count())) throw new Error('edges: no Done after an answer');
+    });
+  },
+  async practiceStats() {
+    await withPage(async page => {
+      await page.goto(BASE + '#practice');
+      await page.evaluate(() => { localStorage.clear(); localStorage.setItem('catpyq.times.v1', '{}'); });
+      await page.reload();
+      await page.click('[data-act=sec][data-sec=QA]');
+      const cell = (sec, k) => page.locator(`#secstats tr[data-sec=${sec}] [data-k=${k}]`).innerText().then(t => t.trim());
+      const eq = async (sec, k, want) => {
+        const got = await cell(sec, k);
+        if (want instanceof RegExp ? !want.test(got) : got !== want) throw new Error(`practiceStats ${sec}.${k}: got "${got}"`);
+      };
+      await eq('QA', 'attempted', '0');
+      await eq('QA', 'time', '—');
+      const cards = page.locator('.list > article.card');
+      const id1 = (await cards.nth(0).getAttribute('id')).slice(2), id2 = (await cards.nth(1).getAttribute('id')).slice(2);
+      await page.locator(`#c-${id1} [data-act=t-start]`).click();
+      await page.waitForTimeout(1200);
+      await page.locator(`#c-${id1} button.opt[data-act=pick]`).first().click();
+      await eq('QA', 'attempted', '1');
+      await eq('QA', 'time', /^0:0[1-3] \/ question$/);
+      await eq('Total', 'attempted', '1');
+      const t1 = await cell('QA', 'time');
+      await page.locator(`#c-${id2} button.opt[data-act=pick]`).first().click();
+      await eq('QA', 'attempted', '2');
+      await eq('QA', 'time', t1);
+      // a DILR set timed and finished with Done
+      await page.click('[data-act=sec][data-sec=DILR]');
+      const set = page.locator('.list > article.card.set').first();
+      await set.locator('.set-head [data-act=t-start]').click();
+      await set.locator('.set-q').first().locator('button.opt[data-act=pick]').first().click();
+      await page.locator('.list > article.card.set').first().locator('.set-head [data-act=t-done]').click();
+      await eq('DILR', 'time', / \/ set · .* \/ question$/);
+      await eq('DILR', 'attempted', '1');
+    });
+  },
+  async practiceTimer() {
+    await withPage(async page => {
+      await page.goto(BASE + '#practice');
+      await page.evaluate(() => localStorage.clear());
+      await page.reload();
+      await page.click('[data-act=sec][data-sec=QA]');
+      const cards = page.locator('.list > article.card');
+      const c1 = cards.nth(0), c2 = cards.nth(1);
+      const id1 = (await c1.getAttribute('id')).slice(2), id2 = (await c2.getAttribute('id')).slice(2);
+      const timesOf = () => page.evaluate(() => JSON.parse(localStorage.getItem('catpyq.times.v1') || '{}'));
+      const want = async (loc, re, what) => {
+        const t = (await loc.innerText()).trim();
+        if (!re.test(t)) throw new Error(`practiceTimer ${what}: got "${t}"`);
+      };
+      // start, tick
+      await c1.locator('[data-act=t-start]').click();
+      await page.waitForTimeout(1300);
+      await want(page.locator(`[data-timer="${id1}"]`), /^0:0[1-2]$/, 'running');
+      // starting another pauses the first
+      await c2.locator('[data-act=t-start]').click();
+      await want(c1.locator('[data-act=t-start]'), /^Resume$/, 'paused button');
+      await want(c1.locator('.ptime'), /^0:0[1-2]$/, 'paused time');
+      // answering stops it
+      await c2.locator('button.opt[data-act=pick]').first().click();
+      await want(page.locator(`#c-${id2} .ptimer`), /^Took 0:0\d$/, 'took');
+      if (await page.locator('[data-timer]').count()) throw new Error('practiceTimer: a clock still runs');
+      // reload while running -> paused
+      await page.locator(`#c-${id1} [data-act=t-start]`).click();
+      await page.reload();
+      await want(page.locator(`#c-${id1} [data-act=t-start]`), /^Resume$/, 'after reload');
+      if ((await timesOf())[id1].state !== 'paused') throw new Error('practiceTimer: not saved as paused');
+      // retry clears the time of a single question
+      await page.locator(`#c-${id2} [data-act=retry]`).click();
+      await want(page.locator(`#c-${id2} [data-act=t-start]`), /^Start timer$/, 'after retry');
+      if ((await timesOf())[id2]) throw new Error('practiceTimer: retry kept the time');
+      // leaving Practice pauses
+      await page.locator(`#c-${id2} [data-act=t-start]`).click();
+      await page.goto(BASE + '#home');
+      await page.waitForSelector('#home-QA');
+      await page.goto(BASE + '#practice');
+      await want(page.locator(`#c-${id2} [data-act=t-start]`), /^Resume$/, 'after leaving');
+      // a DILR set: one timer, Done
+      await page.click('[data-act=sec][data-sec=DILR]');
+      const set = page.locator('.list > article.card.set').first();
+      await set.locator('.set-head [data-act=t-start]').click();
+      await set.locator('.set-q').first().locator('button.opt[data-act=pick]').first().click();
+      await set.locator('.set-head [data-act=t-done]').click();
+      await want(page.locator('.list > article.card.set').first().locator('.set-head .ptimer'), /^Took \d+:\d\d$/, 'set done');
+    });
+  },
   async calculator() {
     await withPage(async page => {
       await page.setViewportSize({width: 1280, height: 800});
@@ -397,6 +516,12 @@ const checks = {
       await page.click('[data-act=sec][data-sec=QA]');
       await page.locator('button.opt[data-act=pick]:not([disabled])').first().click();
       await page.waitForSelector('.chip.ok, .chip.bad', {timeout: 5000});
+      // and so do practice timers (kept in memory)
+      const c2 = page.locator('.list > article.card').nth(1), id2 = (await c2.getAttribute('id')).slice(2);
+      await c2.locator('[data-act=t-start]').click();
+      await page.locator(`#c-${id2} button.opt[data-act=pick]`).first().click();
+      const took = (await page.locator(`#c-${id2} .ptimer`).innerText()).trim();
+      if (!/^Took /.test(took)) throw new Error('storageBlocked: timer got ' + took);
     });
   },
   // Needs a PUBLIC build served at BASE_URL (e.g. BASE_URL=http://localhost:8766/ node tests/e2e/smoke.js publicBuild).

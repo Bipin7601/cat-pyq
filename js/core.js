@@ -137,7 +137,71 @@
     return {total, max, sections};
   }
 
+  /* ---------- practice timers ---------- */
+  // clock: null | {unitId, startedAt, baseMs}; times: {unitId: {ms, state: "paused"|"done"}}
+  function fmtDur(ms) {
+    const t = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, s = t % 60;
+    const ss = String(s).padStart(2, "0");
+    return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+  }
+  const runMs = (clock, now) => clock.baseMs + Math.max(0, now - clock.startedAt);
+  function timerElapsed(clock, times, unitId, now) {
+    if (clock && clock.unitId === unitId) return runMs(clock, now);
+    return times[unitId] ? times[unitId].ms : null;
+  }
+  function timerPause(clock, times, now) {
+    if (!clock) return {clock, times};
+    return {clock: null, times: {...times, [clock.unitId]: {ms: runMs(clock, now), state: "paused"}}};
+  }
+  function timerStart(clock, times, unitId, now) {
+    const t = times[unitId];
+    if ((t && t.state === "done") || (clock && clock.unitId === unitId)) return {clock, times};
+    const paused = timerPause(clock, times, now).times;
+    return {clock: {unitId, startedAt: now, baseMs: t ? t.ms : 0}, times: paused};
+  }
+  function timerStop(clock, times, unitId, now) {
+    if (clock && clock.unitId === unitId) return {clock: null, times: {...times, [unitId]: {ms: runMs(clock, now), state: "done"}}};
+    const t = times[unitId];
+    if (t && t.state === "paused") return {clock, times: {...times, [unitId]: {ms: t.ms, state: "done"}}};
+    return {clock, times};
+  }
+  function clearTimes(clock, times, unitIds) {
+    const next = {...times};
+    unitIds.forEach(id => { delete next[id]; });
+    return {clock: clock && unitIds.includes(clock.unitId) ? null : clock, times: next};
+  }
+  function setFinished(unit, progress) { return unit.questions.every(q => !!progress[q.id]); }
+
+  function sectionStats(units, progress, times, sections) {
+    const acc = () => ({attempted: 0, correct: 0, timedMs: 0, timedQs: 0, setMs: 0, sets: 0, hasSets: false});
+    const raw = {};
+    sections.forEach(s => { raw[s] = acc(); });
+    const all = acc();
+    units.forEach(u => {
+      const r = raw[u.section]; if (!r) return;
+      const qs = questionsOf(u);
+      const answered = qs.filter(q => progress[q.id]);
+      const correct = answered.filter(q => progress[q.id].ok).length;
+      const t = times[u.id], done = t && t.state === "done" && answered.length > 0;
+      [r, all].forEach(x => {
+        x.attempted += answered.length; x.correct += correct;
+        if (done) { x.timedMs += t.ms; x.timedQs += answered.length; }
+      });
+      if (u.kind === "set") { r.hasSets = true; if (done) { r.setMs += t.ms; r.sets++; } }
+    });
+    const row = (x, withSets) => ({
+      attempted: x.attempted, correct: x.correct, wrong: x.attempted - x.correct,
+      accuracy: x.attempted ? x.correct / x.attempted : null,
+      perQuestionMs: x.timedQs ? x.timedMs / x.timedQs : null,
+      perSetMs: withSets && x.sets ? x.setMs / x.sets : null,
+    });
+    const rows = {};
+    sections.forEach(s => { rows[s] = row(raw[s], raw[s].hasSets); });
+    return {rows, total: row(all, false)};
+  }
+
   return {isCorrect, normalizeFilters, questionsOf, filterUnits, tally,
     SECTION_MS, TEST_ORDER, createAttempt, applyTime, submitSection, remainingMs,
-    paletteState, sectionQuestions, scoreAttempt, isAnswered};
+    paletteState, sectionQuestions, scoreAttempt, isAnswered,
+    fmtDur, timerElapsed, timerStart, timerPause, timerStop, clearTimes, setFinished, sectionStats};
 });

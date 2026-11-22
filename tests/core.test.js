@@ -159,3 +159,109 @@ test('isAnswered', () => {
   for (const v of [undefined, null, "", "  "]) assert.equal(Core.isAnswered(v), false);
   for (const v of [0, "0", "3142"]) assert.equal(Core.isAnswered(v), true);
 });
+
+test('fmtDur', () => {
+  assert.equal(Core.fmtDur(0), '0:00');
+  assert.equal(Core.fmtDur(7999), '0:07');
+  assert.equal(Core.fmtDur(108000), '1:48');
+  assert.equal(Core.fmtDur(860000), '14:20');
+  assert.equal(Core.fmtDur(3723000), '1:02:03');
+});
+
+test('timer start, elapsed, stop', () => {
+  let r = Core.timerStart(null, {}, 'a', 1000);
+  assert.deepEqual(r.clock, {unitId: 'a', startedAt: 1000, baseMs: 0});
+  assert.equal(Core.timerElapsed(r.clock, r.times, 'a', 4000), 3000);
+  r = Core.timerStop(r.clock, r.times, 'a', 6000);
+  assert.equal(r.clock, null);
+  assert.deepEqual(r.times.a, {ms: 5000, state: 'done'});
+  assert.equal(Core.timerElapsed(null, r.times, 'a', 9999), 5000);
+  assert.equal(Core.timerElapsed(null, r.times, 'zz', 9999), null);
+});
+
+test('starting another timer pauses the first; resume keeps time', () => {
+  let r = Core.timerStart(null, {}, 'a', 0);
+  r = Core.timerStart(r.clock, r.times, 'b', 2000);
+  assert.deepEqual(r.times.a, {ms: 2000, state: 'paused'});
+  assert.equal(r.clock.unitId, 'b');
+  r = Core.timerStart(r.clock, r.times, 'a', 5000);
+  assert.deepEqual(r.times.b, {ms: 3000, state: 'paused'});
+  assert.deepEqual(r.clock, {unitId: 'a', startedAt: 5000, baseMs: 2000});
+  assert.equal(Core.timerElapsed(r.clock, r.times, 'a', 6000), 3000);
+});
+
+test('timerPause and no-ops', () => {
+  let r = Core.timerStart(null, {}, 'a', 0);
+  r = Core.timerPause(r.clock, r.times, 1500);
+  assert.equal(r.clock, null);
+  assert.deepEqual(r.times.a, {ms: 1500, state: 'paused'});
+  const same = Core.timerPause(null, r.times, 9);
+  assert.equal(same.times, r.times);
+  const done = {a: {ms: 10, state: 'done'}};
+  assert.equal(Core.timerStart(null, done, 'a', 0).clock, null);
+  assert.equal(Core.timerStop(null, {}, 'x', 0).times.x, undefined);
+});
+
+test('timerStop finishes a paused unit', () => {
+  let r = Core.timerStart(null, {}, 'set1', 0);
+  r = Core.timerStart(r.clock, r.times, 'q9', 4000);   // set1 paused at 4000
+  r = Core.timerStop(r.clock, r.times, 'set1', 7000);
+  assert.deepEqual(r.times.set1, {ms: 4000, state: 'done'});
+  assert.equal(r.clock.unitId, 'q9', 'the running clock is untouched');
+});
+
+test('timer functions do not mutate inputs', () => {
+  const times = {a: {ms: 5, state: 'paused'}};
+  const clock = {unitId: 'b', startedAt: 0, baseMs: 0};
+  Core.timerStart(clock, times, 'a', 10);
+  assert.deepEqual(times, {a: {ms: 5, state: 'paused'}});
+  assert.deepEqual(clock, {unitId: 'b', startedAt: 0, baseMs: 0});
+});
+
+test('clearTimes', () => {
+  const times = {a: {ms: 5, state: 'done'}, b: {ms: 6, state: 'paused'}};
+  let r = Core.clearTimes(null, times, ['a']);
+  assert.deepEqual(Object.keys(r.times), ['b']);
+  r = Core.clearTimes({unitId: 'c', startedAt: 0, baseMs: 0}, times, ['c']);
+  assert.equal(r.clock, null, 'clearTimes stops the clock');
+  r = Core.clearTimes({unitId: 'c', startedAt: 0, baseMs: 0}, times, ['a']);
+  assert.equal(r.clock.unitId, 'c');
+});
+
+test('setFinished', () => {
+  const s = {kind: 'set', questions: [{id: 'x1'}, {id: 'x2'}]};
+  assert.equal(Core.setFinished(s, {x1: {v: 0, ok: true}}), false);
+  assert.equal(Core.setFinished(s, {x1: {v: 0, ok: true}, x2: {v: 1, ok: false}}), true);
+});
+
+test('sectionStats', () => {
+  const q = (id, sec) => ({id, kind: 'q', section: sec, type: 'MCQ', answer: 0});
+  const units = [
+    q('q1', 'QA'), q('q2', 'QA'), q('q3', 'QA'),
+    {id: 'd1', kind: 'set', section: 'DILR', questions: [{id: 'd1a'}, {id: 'd1b'}, {id: 'd1c'}, {id: 'd1d'}]},
+    {id: 'd2', kind: 'set', section: 'DILR', questions: [{id: 'd2a'}, {id: 'd2b'}]},
+    {id: 'r1', kind: 'set', section: 'VARC', questions: [{id: 'r1a'}, {id: 'r1b'}]},
+    q('v1', 'VARC'),
+  ];
+  const progress = {
+    q1: {ok: true}, q2: {ok: false}, q3: {ok: true},
+    d1a: {ok: true}, d1b: {ok: false}, d2a: {ok: true},
+    r1a: {ok: true}, r1b: {ok: true}, v1: {ok: false},
+  };
+  const times = {
+    q1: {ms: 60000, state: 'done'}, q2: {ms: 120000, state: 'done'}, q3: {ms: 999, state: 'paused'},
+    d1: {ms: 600000, state: 'done'},          // 2 answered -> 300000 per question
+    d2: {ms: 50000, state: 'paused'},         // not finished: excluded
+    r1: {ms: 240000, state: 'done'}, v1: {ms: 60000, state: 'done'},
+  };
+  const s = Core.sectionStats(units, progress, times, ['QA', 'DILR', 'VARC']);
+  assert.deepEqual(s.rows.QA, {attempted: 3, correct: 2, wrong: 1, accuracy: 2 / 3, perQuestionMs: 90000, perSetMs: null});
+  assert.deepEqual(s.rows.DILR, {attempted: 3, correct: 2, wrong: 1, accuracy: 2 / 3, perQuestionMs: 300000, perSetMs: 600000});
+  assert.equal(s.rows.VARC.perQuestionMs, 100000);  // (240000 + 60000) / 3
+  assert.equal(s.rows.VARC.perSetMs, 240000);
+  assert.deepEqual(s.total, {attempted: 9, correct: 6, wrong: 3, accuracy: 6 / 9, perQuestionMs: (180000 + 600000 + 300000) / 7, perSetMs: null});
+  // a set marked done with nothing answered is ignored; empty sections give nulls
+  const e = Core.sectionStats(units, {}, {d2: {ms: 5, state: 'done'}}, ['QA', 'DILR']);
+  assert.deepEqual(e.rows.DILR, {attempted: 0, correct: 0, wrong: 0, accuracy: null, perQuestionMs: null, perSetMs: null});
+  assert.equal(Object.keys(e.rows).join(), 'QA,DILR');
+});

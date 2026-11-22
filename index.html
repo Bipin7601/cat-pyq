@@ -61,6 +61,7 @@ nav a:hover{color:var(--ink)}
 nav a[aria-current="page"]{color:var(--ink);box-shadow:inset 0 -2px 0 var(--blue);border-radius:0}
 
 main{padding-block:36px 72px;display:grid;gap:44px}
+main > *{min-width:0}
 .lede{color:var(--pencil);max-width:62ch;margin:10px 0 0;font-size:17px;line-height:1.5}
 .sec-head{display:flex;justify-content:space-between;align-items:baseline;gap:6px 16px;flex-wrap:wrap;margin-bottom:14px}
 .sec-head p{margin:0;color:var(--pencil);font-size:15px}
@@ -133,9 +134,22 @@ select:hover,input[type=text]:hover:not(:disabled){border-color:var(--pencil)}
 .count{margin-left:auto;font-size:14px;color:var(--pencil);align-self:center;font-variant-numeric:tabular-nums}
 
 /* session tally: one row of figures */
-.tally{display:flex;flex-wrap:wrap;gap:10px 36px;padding:18px 2px 16px;border-bottom:1px solid var(--rule)}
+.secstats{margin-top:16px;background:var(--sheet);border:1px solid var(--rule);border-radius:var(--r);padding:14px 18px 10px}
+.secstats-h{font:500 14px var(--f-ui);font-stretch:100%;color:var(--pencil);letter-spacing:0;margin:0 0 4px}
+.secstats-wrap{overflow-x:auto}
+.secstats table{border-collapse:collapse;width:100%;font-size:15px;font-variant-numeric:tabular-nums}
+.secstats th,.secstats td{border-bottom:1px solid var(--rule);padding:8px 10px;text-align:right;white-space:nowrap}
+.secstats th:first-child{text-align:left;padding-left:0}
+.secstats thead th{font-size:14px;font-weight:500;color:var(--pencil)}
+.secstats tbody th{font-weight:600}
+.secstats td.ok{color:var(--ok)} .secstats td.bad{color:var(--bad)}
+.secstats td[data-k=time]{padding-right:0}
+.secstats tfoot th,.secstats tfoot td{font-weight:600;border-bottom:0}
+.secstats tbody tr:last-child th,.secstats tbody tr:last-child td{border-bottom-color:var(--pencil)}
+@media (max-width:640px){.secstats{padding:12px 12px 8px}.secstats table{font-size:14px}.secstats th,.secstats td{padding:7px 6px}.secstats td[data-k=time]{white-space:normal;min-width:8.5em}}
+.tally{display:flex;flex-wrap:wrap;gap:8px 28px;padding:12px 2px 12px;border-bottom:1px solid var(--rule)}
 .tally div{display:grid;gap:0}
-.tally b{font:600 26px/1.15 var(--f-ui);font-variant-numeric:tabular-nums}
+.tally b{font:600 20px/1.2 var(--f-ui);font-variant-numeric:tabular-nums}
 .tally span{font-size:14px;color:var(--pencil)}
 .tally [data-k=correct] b{color:var(--ok)} .tally [data-k=wrong] b{color:var(--bad)}
 .tally .tally-reset{margin-left:auto;align-self:center;display:flex;gap:8px;align-items:center}
@@ -155,6 +169,11 @@ select:hover,input[type=text]:hover:not(:disabled){border-color:var(--pencil)}
 .meta{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:baseline;margin-bottom:12px}
 .src{font-size:14px;color:var(--pencil);font-variant-numeric:tabular-nums}
 .card > .meta .src:first-child{color:var(--ink);font-weight:600;font-size:15px}
+.ptimer{display:inline-flex;gap:8px;align-items:center;margin-left:auto;align-self:center}
+.ptime{font:500 14px var(--f-ui);font-variant-numeric:tabular-nums;color:var(--pencil)}
+.ptime.run{color:var(--blue);font-weight:600;min-width:3.2em;text-align:right}
+.btn.quiet{border-color:transparent;background:none;color:var(--pencil)}
+.btn.quiet:hover{color:var(--blue);background:var(--blue-wash)}
 .chip{font-size:14px;color:var(--pencil)}
 .chip.ok,.chip.bad{font-weight:600;display:inline-flex;align-items:center;gap:6px}
 .chip.ok::before,.chip.bad::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor}
@@ -450,6 +469,11 @@ let progress = store.get(K_PROG, {});          // qid -> {v: chosen value, ok: b
 let filters = Core.normalizeFilters(store.get(K_FILT, null) || store.get(K_FILT_V1, null));
 let revealed = new Set();                       // qids whose solution is shown without attempting
 let revealedSets = new Set();                   // set ids whose overall explanation is shown
+const K_TIME = "catpyq.times.v1";
+let times = store.get(K_TIME, {});              // unit id -> {ms, state: "paused"|"done"} (practice timers)
+if(!times || typeof times !== "object" || Array.isArray(times)) times = {};
+let clock = null, clockTick = null;             // the one running practice timer: {unitId, startedAt, baseMs}
+const saveTimes = () => store.set(K_TIME, times);
 
 /* ---------- data ---------- */
 let base = {items:[]};
@@ -677,15 +701,54 @@ function qBody(q, u){
   if(show) h += renderSolution(q, u);
   return h;
 }
+/* ---------- practice timers ---------- */
+function setClock(c){
+  clock = c;
+  if(clock && !clockTick) clockTick = setInterval(tickClock, 1000);
+  if(!clock && clockTick){ clearInterval(clockTick); clockTick = null; }
+}
+function applyTimer(r){ times = r.times; setClock(r.clock); saveTimes(); }
+function tickClock(){
+  if(!clock) return;
+  const el = document.querySelector(`[data-timer="${CSS.escape(clock.unitId)}"]`);
+  if(el) el.textContent = Core.fmtDur(Core.timerElapsed(clock, times, clock.unitId, Date.now()));
+}
+// pause the running timer; redraw its card (if shown) so it offers Resume instead of a frozen clock
+function pauseClock(redraw){
+  if(!clock) return;
+  const id = clock.unitId;
+  applyTimer(Core.timerPause(clock, times, Date.now()));
+  if(redraw && document.getElementById("c-" + id)) rerenderKeepScroll("c-" + id);
+}
+// a clock only runs while its card is on screen (section, filter or page changes pause it)
+function pauseIfOffscreen(){ if(clock && !document.querySelector(`[data-timer="${CSS.escape(clock.unitId)}"]`)) pauseClock(false); }
+function timerHtml(u){
+  const id = esc(u.id), isSet = u.kind === "set", t = times[u.id];
+  let h = "";
+  if(clock && clock.unitId === u.id){
+    h = `<span class="ptime run" data-timer="${id}">${Core.fmtDur(Core.timerElapsed(clock, times, u.id, Date.now()))}</span>`
+      + (isSet && u.questions.some(q => progress[q.id]) ? `<button class="btn small" data-act="t-done" data-u="${id}">Done</button>` : "");
+  }
+  else if(t && t.state === "paused") h = `<span class="ptime">${Core.fmtDur(t.ms)}</span><button class="btn small" data-act="t-start" data-u="${id}">Resume</button>`;
+  else if(t && t.state === "done") h = `<span class="ptime">Took ${Core.fmtDur(t.ms)}</span>`;
+  else if(!(isSet ? Core.setFinished(u, progress) : progress[u.id])) h = `<button class="btn small quiet" data-act="t-start" data-u="${id}">Start timer</button>`;
+  return h ? `<span class="ptimer" data-unit="${id}">${h}</span>` : "";
+}
+// after an answer: a single question's timer stops; a set's stops once every question is answered
+function stopTimerAfterAnswer(qid){
+  const e = qIndex.get(qid); if(!e) return;
+  const u = e.unit;
+  if(u.kind !== "set" || Core.setFinished(u, progress)) applyTimer(Core.timerStop(clock, times, u.id, Date.now()));
+}
 function qCard(u){
   return `<article class="card" id="c-${esc(u.id)}">
-    <div class="meta"><span class="src">${esc(srcLine(u,u))}</span>${u.topic?`<span class="chip topic">${esc(u.topic)}</span>`:""}<span class="chip">${typeLabel(u)}</span>${statusChip(u)}</div>
+    <div class="meta"><span class="src">${esc(srcLine(u,u))}</span>${u.topic?`<span class="chip topic">${esc(u.topic)}</span>`:""}<span class="chip">${typeLabel(u)}</span>${statusChip(u)}${timerHtml(u)}</div>
     ${qBody(u, u)}</article>`;
 }
 function setCard(u){
   const st = statsFor(u.questions);
   return `<article class="card set" id="c-${esc(u.id)}">
-    <div class="set-head"><div class="meta"><span class="src">${esc(srcLine(u,{},0))}${u.n?`, set ${esc(u.n)}`:""}</span>${u.topic?`<span class="chip topic">${esc(u.topic)}</span>`:""}<span class="chip">${st.correct} of ${st.questions} correct, ${st.attempted} tried</span></div>
+    <div class="set-head"><div class="meta"><span class="src">${esc(srcLine(u,{},0))}${u.n?`, set ${esc(u.n)}`:""}</span>${u.topic?`<span class="chip topic">${esc(u.topic)}</span>`:""}<span class="chip">${st.correct} of ${st.questions} correct, ${st.attempted} tried</span>${timerHtml(u)}</div>
       <h3>${esc(u.title || "Set")}</h3></div>
     <div class="set-body">
       <div class="directions"><div class="directions-inner"><h4>Directions</h4>
@@ -764,6 +827,21 @@ function picker(id, key, allLabel, opts, sel){
     ${opts.map((o,i)=>`<label class="ms-opt"><input type="checkbox" id="${id}-${i}" data-f="${key}" value="${esc(o.value)}" ${sel.includes(o.value)?"checked":""}><span>${esc(o.label)}</span><em>${o.n}</em></label>`).join("")}
   </div></div>`;
 }
+/* all-time stats per section (everything practised, not just the current filters) */
+function statsHtml(){
+  const st = Core.sectionStats(items, progress, times, SECTIONS);
+  const pct = a => a === null ? "\u2014" : Math.round(a * 100) + "%";
+  const time = r => r.perQuestionMs === null ? "\u2014"
+    : (r.perSetMs !== null ? `${Core.fmtDur(r.perSetMs)} / set \u00b7 ` : "") + `${Core.fmtDur(r.perQuestionMs)} / question`;
+  const cells = (r, total) => `<td data-k="attempted">${r.attempted}</td><td data-k="correct" class="ok">${r.correct}</td><td data-k="wrong" class="bad">${r.wrong}</td><td data-k="accuracy">${pct(r.accuracy)}</td><td data-k="time">${total ? "" : time(r)}</td>`;
+  return `<section class="secstats" id="secstats" aria-labelledby="secstats-h">
+    <h2 class="secstats-h" id="secstats-h">Your stats, all practice so far</h2>
+    <div class="secstats-wrap"><table>
+      <thead><tr><th scope="col">Section</th><th scope="col">Attempted</th><th scope="col">Correct</th><th scope="col">Wrong</th><th scope="col">Accuracy</th><th scope="col">Avg time</th></tr></thead>
+      <tbody>${SECTIONS.map(s => `<tr data-sec="${s}"><th scope="row">${s}</th>${cells(st.rows[s], false)}</tr>`).join("")}</tbody>
+      <tfoot><tr data-sec="Total"><th scope="row">Total</th>${cells(st.total, true)}</tr></tfoot>
+    </table></div></section>`;
+}
 function tallyHtml(){
   const t = Core.tally(Core.filterUnits(items, {...filters, status:"all"}, progress), progress);
   const cells = [["questions","Questions",t.questions],["attempted","Attempted",t.attempted],["correct","Correct",t.correct],["wrong","Wrong",t.wrong],["notAttempted","Not attempted",t.notAttempted],["accuracy","Accuracy",t.accuracy===null?"\u2014":Math.round(t.accuracy*100)+"%"]];
@@ -792,6 +870,7 @@ function viewPractice(){
       <option value="wrong" ${filters.status==="wrong"?"selected":""}>Got wrong</option></select></div>
     <span class="count">${sec==="QA" ? `${list.length} questions` : `${list.length} ${unitWord}`}</span>
   </div>
+  ${statsHtml()}
   ${tallyHtml()}
   <div class="list" style="margin-top:20px">${list.length ? list.map(unitCard).join("") : `<div class="empty"><h3>Nothing matches these filters</h3><p>Change the topic, paper or Show filter.</p></div>`}</div></div>`;
 }
@@ -819,11 +898,13 @@ function viewPapers(){
 /* ---------- router ---------- */
 const app = document.getElementById("app");
 let testTick = null;
+const timedView = h => /^(test|review)-/.test(h);
 function route(){
   const h = (location.hash || "#home").slice(1);
   let html, navKey = h;
   if(testTick){ clearInterval(testTick); testTick = null; }
-  const timed = /^(test|review)-/.test(h);
+  const timed = timedView(h);
+  if(clock && timedView(h)) pauseClock(false); // the timed test and review have no practice cards
   app.classList.toggle("wide", h.startsWith("test-"));
   if(timed){
     document.querySelectorAll("#nav a").forEach(a => a.removeAttribute("aria-current"));
@@ -838,6 +919,7 @@ function route(){
   document.querySelectorAll("#nav a").forEach(a => { if(a.getAttribute("href") === "#"+navKey) a.setAttribute("aria-current","page"); else a.removeAttribute("aria-current"); });
   app.innerHTML = html;
   observeImgs(app); typeset(app);
+  pauseIfOffscreen();
 }
 function rerenderKeepScroll(anchorId){
   const el = anchorId && document.getElementById(anchorId);
@@ -845,6 +927,8 @@ function rerenderKeepScroll(anchorId){
   if(!el || !unit){ route(); return; }
   const tl = document.getElementById("tally");
   if(tl){ const tmpT = document.createElement("div"); tmpT.innerHTML = tallyHtml(); tl.replaceWith(tmpT.firstElementChild); }
+  const ss = document.getElementById("secstats");
+  if(ss){ const tmpS = document.createElement("div"); tmpS.innerHTML = statsHtml(); ss.replaceWith(tmpS.firstElementChild); }
   const before = el.getBoundingClientRect().top;
   const tmp = document.createElement("div"); tmp.innerHTML = unitCard(unit);
   const fresh = tmp.firstElementChild;
@@ -865,15 +949,27 @@ app.addEventListener("click", ev => {
   if(ev.target.closest(".tscreen, .t-modal, .t-review") || (b && b.dataset.act === "start-test")){ TestView.onClick(ev); return; }
   if(!b) return;
   const act = b.dataset.act, qid = b.dataset.q;
-  if(act === "pick"){ record(qid, Number(b.dataset.v)); rerenderKeepScroll(cardIdOf(qid)); }
+  if(act === "pick"){ record(qid, Number(b.dataset.v)); stopTimerAfterAnswer(qid); rerenderKeepScroll(cardIdOf(qid)); }
   else if(act === "tita"){
     const inp = document.getElementById("in-" + qid); const v = inp ? inp.value.trim() : "";
     if(!v){ inp && inp.focus(); return; }
-    record(qid, v); rerenderKeepScroll(cardIdOf(qid));
+    record(qid, v); stopTimerAfterAnswer(qid); rerenderKeepScroll(cardIdOf(qid));
   }
   else if(act === "reveal"){ revealed.add(qid); rerenderKeepScroll(cardIdOf(qid)); }
   else if(act === "setsol"){ revealedSets.add(b.dataset.set); rerenderKeepScroll("c-" + b.dataset.set); }
-  else if(act === "retry"){ delete progress[qid]; revealed.delete(qid); store.set(K_PROG, progress); rerenderKeepScroll(cardIdOf(qid)); }
+  else if(act === "retry"){
+    delete progress[qid]; revealed.delete(qid); store.set(K_PROG, progress);
+    const e = qIndex.get(qid);
+    if(e && e.unit.kind !== "set") applyTimer(Core.clearTimes(clock, times, [e.unit.id])); // a set keeps its time
+    rerenderKeepScroll(cardIdOf(qid));
+  }
+  else if(act === "t-start"){
+    const prev = clock && clock.unitId;
+    applyTimer(Core.timerStart(clock, times, b.dataset.u, Date.now()));
+    if(prev && prev !== b.dataset.u && document.getElementById("c-" + prev)) rerenderKeepScroll("c-" + prev);
+    rerenderKeepScroll("c-" + b.dataset.u);
+  }
+  else if(act === "t-done"){ applyTimer(Core.timerStop(clock, times, b.dataset.u, Date.now())); rerenderKeepScroll("c-" + b.dataset.u); }
   else if(act === "topic"){ filters.section = b.dataset.sec; filters.topics = [b.dataset.topic]; filters.papers = []; store.set(K_FILT, filters); location.hash = "practice"; window.scrollTo(0,0); }
   else if(act === "sec"){ openPicker = null; filters.section = b.dataset.sec; filters.topics = []; filters.papers = []; store.set(K_FILT, filters); route(); }
   else if(act === "msopen"){ openPicker = openPicker === b.dataset.key ? null : b.dataset.key; route(); const t = document.getElementById("f-" + b.dataset.key); t && t.focus(); }
@@ -888,16 +984,18 @@ app.addEventListener("click", ev => {
     box.innerHTML = `<span style="font-size:14px">Are you sure?</span><button class="btn small danger" data-act="do-${what}">Yes, clear</button><button class="btn small" data-act="cancel">Cancel</button>`;
   }
   else if(act === "cancel") route();
-  else if(act === "do-reset-all"){ progress = {}; revealed.clear(); store.set(K_PROG, progress); route(); }
+  else if(act === "do-reset-all"){ progress = {}; revealed.clear(); store.set(K_PROG, progress); applyTimer({clock: null, times: {}}); route(); }
   else if(act === "do-reset-sel"){
     // clear answers for every question in the current selection (section + topics + papers), so the tally starts from zero
-    Core.filterUnits(items, {...filters, status:"all"}, progress).flatMap(questionsOf).forEach(q => { delete progress[q.id]; revealed.delete(q.id); });
-    store.set(K_PROG, progress); route();
+    const sel = Core.filterUnits(items, {...filters, status:"all"}, progress);
+    sel.flatMap(questionsOf).forEach(q => { delete progress[q.id]; revealed.delete(q.id); });
+    store.set(K_PROG, progress); applyTimer(Core.clearTimes(clock, times, sel.map(u => u.id))); route();
   }
   else if(act === "do-reset-paper"){
     const id = location.hash.slice(7);
-    items.filter(u => u.paper === id).flatMap(questionsOf).forEach(q => { delete progress[q.id]; revealed.delete(q.id); });
-    store.set(K_PROG, progress); route();
+    const inPaper = items.filter(u => u.paper === id);
+    inPaper.flatMap(questionsOf).forEach(q => { delete progress[q.id]; revealed.delete(q.id); });
+    store.set(K_PROG, progress); applyTimer(Core.clearTimes(clock, times, inPaper.map(u => u.id))); route();
   }
 });
 app.addEventListener("change", ev => {
@@ -950,6 +1048,9 @@ app.addEventListener("click", ev => {
   document.body.appendChild(zoomEl); zoomEl.querySelector("#zoom-close").focus();
 });
 document.addEventListener("keydown", e => { if(e.key === "Escape") closeZoom(); });
+window.addEventListener("pagehide", () => pauseClock(true));
+document.addEventListener("visibilitychange", () => { if(document.visibilityState === "hidden") pauseClock(true); });
+window.addEventListener("pageshow", ev => { if(ev.persisted) route(); }); // back/forward cache: redraw from saved state
 window.addEventListener("hashchange", () => { openPicker = null; closeZoom(); route(); window.scrollTo(0,0); });
 fetch("data/meta.json").then(r => r.ok ? r.json() : {items:[]}).catch(() => ({items:[]}))
   .then(d => { base = d && d.items ? d : {items:[]}; rebuild(); route(); });
