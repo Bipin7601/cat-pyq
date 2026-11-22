@@ -24,6 +24,45 @@ async function withPage(fn) {
 }
 
 const checks = {
+  async calculator() {
+    await withPage(async page => {
+      await page.setViewportSize({width: 1280, height: 800});
+      await page.goto(BASE + '#practice');
+      await page.click('#calc-toggle');
+      const val = () => page.locator('#calc-val').innerText();
+      for (const k of ['1', '2', '+', '3', '=']) await page.click(`#calc [data-key="${k}"]`);
+      if (await val() !== '15') throw new Error('clicks gave ' + await val());
+      await page.keyboard.type('6*7');
+      await page.keyboard.press('Enter');
+      if (await val() !== '42') throw new Error('keyboard gave ' + await val());
+      // typing into the calculator must not leak into the page
+      if (await page.locator('#calc').evaluate(el => !el.contains(document.activeElement))) throw new Error('focus left the calculator');
+      const head = page.locator('#calc .calc-head');
+      const a = await head.boundingBox();
+      await page.mouse.move(a.x + 40, a.y + 10);
+      await page.mouse.down();
+      await page.mouse.move(a.x - 260, a.y + 210, {steps: 6});
+      await page.mouse.up();
+      const b = await head.boundingBox();
+      if (Math.abs(b.x - (a.x - 300)) > 2 || Math.abs(b.y - (a.y + 200)) > 2) throw new Error(`drag: ${a.x},${a.y} -> ${b.x},${b.y}`);
+      await page.keyboard.press('Escape');
+      if (await page.locator('#calc').isVisible()) throw new Error('Escape did not close');
+      await page.reload();
+      await page.click('#calc-toggle');
+      const c = await head.boundingBox();
+      if (Math.abs(c.x - b.x) > 2 || Math.abs(c.y - b.y) > 2) throw new Error('position not remembered');
+      // dragging off-screen is clamped inside the window
+      await page.mouse.move(c.x + 40, c.y + 10); await page.mouse.down();
+      await page.mouse.move(5000, 5000, {steps: 4}); await page.mouse.up();
+      const d = await page.locator('#calc').boundingBox();
+      if (d.x + d.width > 1280 || d.y + d.height > 800) throw new Error('not clamped');
+      // the button is also there during a timed test
+      await page.goto(BASE + '#home');
+      await page.locator('[data-act=start-test]').first().click();
+      await page.waitForSelector('#t-timer');
+      if (!(await page.locator('#calc-toggle').isVisible())) throw new Error('no calculator in timed test');
+    });
+  },
   async practiceAnswersMcq() {
     await withPage(async page => {
       await page.goto(BASE + '#practice');

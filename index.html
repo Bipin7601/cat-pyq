@@ -345,6 +345,38 @@ main.wide{padding-top:20px}
 
 @media (max-width:980px){.t-body{grid-template-columns:1fr}.t-side,.t-dir{position:static}.t-main.has-dir{grid-template-columns:1fr}.t-dir{border-right:0;border-bottom:1px solid var(--rule);max-height:none}
   .t-head{grid-template-columns:1fr auto}.t-strip{grid-column:1/-1;grid-row:2}}
+/* calculator (CAT-style, draggable) */
+.bar-right{display:flex;align-items:center;gap:8px 16px;flex-wrap:wrap}
+.calc-toggle{display:inline-flex;align-items:center;gap:7px;min-height:36px;padding:6px 12px;background:var(--sheet);border:1px solid var(--rule);border-radius:var(--rc);color:var(--ink);font-weight:500;font-size:15px;cursor:pointer}
+.calc-toggle:hover{border-color:var(--pencil)}
+.calc-toggle[aria-pressed="true"]{background:var(--blue);border-color:var(--blue);color:var(--on-blue)}
+@media (max-width:520px){.calc-toggle span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}}
+.calc{position:fixed;z-index:20;left:0;top:0;width:272px;background:var(--sheet);border:1px solid var(--rule);border-radius:var(--r);box-shadow:0 14px 36px rgba(0,0,0,.2);user-select:none;-webkit-user-select:none}
+.calc[hidden]{display:none}
+.calc:focus{outline:none}.calc:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.calc-head{display:flex;align-items:center;justify-content:space-between;padding:6px 6px 6px 14px;background:var(--blue);color:var(--on-blue);border-radius:calc(var(--r) - 1px) calc(var(--r) - 1px) 0 0;font:600 15px var(--f-ui);cursor:grab;touch-action:none}
+.calc.dragging .calc-head{cursor:grabbing}
+.calc-x{width:30px;height:30px;border:0;border-radius:var(--rc);background:none;color:inherit;font-size:22px;line-height:1;cursor:pointer}
+.calc-x:hover{background:color-mix(in srgb,var(--on-blue) 18%,transparent)}
+.calc-screen{margin:12px 12px 10px;padding:6px 10px 4px;background:var(--wash);border:1px solid var(--rule);border-radius:var(--rc);text-align:right;min-width:0}
+.calc-expr{min-height:20px;font-size:13px;color:var(--pencil);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.calc-line{display:flex;align-items:baseline;gap:8px}
+.calc-mem{font:600 12px var(--f-ui);color:var(--blue);min-width:12px;text-align:left}
+.calc-val{flex:1;min-width:0;font:600 28px/1.25 var(--f-ui);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.calc-val.long{font-size:19px;line-height:1.85}
+.calc-val.err{font-size:15px;line-height:2.4;color:var(--bad)}
+.calc-keys{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;padding:0 12px 12px}
+.calc-keys button{min-height:38px;padding:0;background:var(--sheet);border:1px solid var(--rule);border-radius:var(--rc);font:500 16px var(--f-ui);color:var(--ink);cursor:pointer}
+.calc-keys button:hover{border-color:var(--pencil)}
+.calc-keys button:active{transform:translateY(1px)}
+.calc-keys .k-mem{background:var(--wash);color:var(--pencil);font-size:13px}
+.calc-keys .k-fn{background:var(--wash)}
+.calc-keys .k-op{background:var(--blue-wash);color:var(--blue);font-size:18px}
+.calc-keys .k-clear{background:var(--bad-wash);color:var(--bad);border-color:color-mix(in srgb,var(--bad) 30%,var(--rule))}
+.calc-keys .k-eq{grid-row:span 2;background:var(--blue);border-color:var(--blue);color:var(--on-blue);font-size:20px}
+.calc-keys .k-eq:hover{border-color:var(--ink)}
+.calc-keys .k-wide{grid-column:span 2}
+@media print{.calc,.calc-toggle{display:none}}
 @media (max-width:560px){h1{font-size:26px}.card,.r-q{padding:16px}.set-head,.directions,.set-qs,.t-q,.t-dir{padding:16px}.opt{gap:10px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
@@ -360,16 +392,24 @@ window.MathJax = {
 <header class="bar">
   <div class="wrap">
     <a class="brand" href="#home">CAT PYQ Desk</a>
-    <nav id="nav" aria-label="Main">
-      <a href="#practice">Practice</a>
-      <a href="#papers">Full papers</a>
-    </nav>
+    <div class="bar-right">
+      <nav id="nav" aria-label="Main">
+        <a href="#practice">Practice</a>
+        <a href="#papers">Full papers</a>
+      </nav>
+      <button type="button" class="calc-toggle" id="calc-toggle" title="Calculator">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="2.5" width="15" height="19" rx="2.5"/><rect x="7.5" y="5.5" width="9" height="4" rx="1"/><path d="M8 13h.01M12 13h.01M16 13h.01M8 17h.01M12 17h.01M16 17h.01"/></svg>
+        <span>Calculator</span>
+      </button>
+    </div>
   </div>
 </header>
 <main class="wrap" id="app"><div class="empty"><h3>Loading questions</h3></div></main>
 
 <script src="js/core.js"></script>
 <script src="js/exam-view.js"></script>
+<script src="js/calc.js"></script>
+<script>Calc.mount(document.getElementById("calc-toggle"));</script>
 <script>
 (() => {
 "use strict";
