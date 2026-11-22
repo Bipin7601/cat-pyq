@@ -397,7 +397,12 @@ const checks = {
       if (!dilr && await page.locator('[data-act=sec][data-sec=DILR]').count()) throw new Error('public: DILR section switch');
       await page.locator('[data-act=reveal]').first().click();
       await page.waitForSelector('.solution .expl, .solution .empty-note');
-      await page.waitForFunction(() => /Explanation coming soon/.test(document.querySelector('.solution').innerText));
+      // Either an explanation has been written (it renders from data/x/ as real text) or the placeholder shows.
+      await page.waitForFunction(() => {
+        const s = document.querySelector('.solution'); if (!s) return false;
+        const ex = s.querySelector('.expl');
+        return /Explanation coming soon/.test(s.innerText) || (ex && ex.innerText.trim().length > 20);
+      });
       await page.goto(BASE + '#paper-2023-1');
       await page.waitForSelector('.seg');
       if (!dilr && await page.locator('[data-act=psec][data-sec=DILR]').count()) throw new Error('public: paper DILR tab');
